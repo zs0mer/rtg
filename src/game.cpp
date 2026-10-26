@@ -136,14 +136,16 @@ namespace bb
     {
       player.pos.x = radius;
       player.vel.x = std::abs(player.vel.x) * 0.78;
-      if (player.vel.y > 0) player.vel.y *= 0.85;
+      if (player.vel.y > 0)
+        player.vel.y *= 0.85;
       burst(player.pos, 4, 1, 8);
     }
     if (player.pos.x > width - radius)
     {
       player.pos.x = width - radius;
       player.vel.x = -std::abs(player.vel.x) * 0.78;
-      if (player.vel.y > 0) player.vel.y *= 0.85;
+      if (player.vel.y > 0)
+        player.vel.y *= 0.85;
       burst(player.pos, 4, 1, 8);
     }
     for (const auto &p : platforms)

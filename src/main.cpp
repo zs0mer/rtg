@@ -21,7 +21,56 @@ namespace
     int r, g, b;
     bool operator==(const RGB &) const = default;
   };
-  constexpr RGB ink{-1, -1, -1}, cyan{79, 244, 221}, gold{255, 206, 98}, red{255, 78, 111}, white{231, 242, 255}, muted{92, 115, 147};
+  constexpr RGB ink{-1, -1, -1}, gun{145, 94, 55};
+  struct Theme
+  {
+    const char *name;
+    RGB platform, ammo, danger, player, repair, brute;
+  };
+  constexpr std::array<Theme, 10> themes{{
+      {"reactor", {40,255,220}, {255,215,60}, {255,65,110}, {225,255,250}, {100,255,140}, {190,85,255}},
+      {"synthwave", {0,235,255}, {255,80,230}, {255,105,65}, {255,230,255}, {150,255,100}, {165,100,255}},
+      {"acid", {170,255,0}, {255,245,40}, {255,55,150}, {240,255,205}, {0,255,175}, {200,80,255}},
+      {"glacier", {70,180,255}, {90,255,245}, {255,85,145}, {235,250,255}, {135,255,180}, {175,125,255}},
+      {"inferno", {255,120,20}, {255,225,65}, {255,45,100}, {255,245,205}, {90,255,165}, {235,65,255}},
+      {"sakura", {255,105,210}, {100,245,255}, {255,90,65}, {255,235,250}, {155,255,150}, {180,100,255}},
+      {"ultraviolet", {170,90,255}, {75,255,230}, {255,70,130}, {245,235,255}, {165,255,80}, {255,125,235}},
+      {"outrun", {255,65,170}, {255,185,40}, {255,80,65}, {255,240,250}, {50,255,185}, {110,130,255}},
+      {"matrix", {30,255,100}, {195,255,55}, {255,90,110}, {220,255,230}, {70,255,225}, {190,105,255}},
+      {"prism", {65,210,255}, {255,235,70}, {255,65,155}, {245,250,255}, {90,255,150}, {190,100,255}}
+  }};
+  RGB cyan, gold, red, white, muted, repair, brute, edge, shadow, lavaDark;
+  RGB dim(RGB c, double factor) { return {int(c.r * factor), int(c.g * factor), int(c.b * factor)}; }
+  struct ThemePhase { size_t current, next; double blend; };
+  constexpr ThemePhase themePhase(size_t base, double altitude)
+  {
+    double height = std::max(0.0, altitude);
+    size_t stage = static_cast<size_t>(height / 500);
+    double progress = std::clamp((height - stage * 500.0 - 400) / 100, 0.0, 1.0);
+    double smooth = progress * progress * (3 - 2 * progress);
+    return {(base + stage) % themes.size(), (base + stage + 1) % themes.size(), smooth};
+  }
+  constexpr RGB mix(RGB a, RGB b, double t)
+  {
+    return {int(a.r + (b.r - a.r) * t), int(a.g + (b.g - a.g) * t), int(a.b + (b.b - a.b) * t)};
+  }
+  static_assert(themePhase(0, 399).blend == 0);
+  static_assert(themePhase(0, 450).blend == 0.5);
+  static_assert(themePhase(0, 500).current == 1 && themePhase(0, 500).blend == 0);
+  static_assert(themePhase(9, 500).current == 0 && themePhase(0, 5000).current == 0);
+  static_assert(mix({0, 100, 200}, {100, 200, 0}, 0.5) == RGB{50, 150, 100});
+  void applyTheme(size_t index, double altitude = 0)
+  {
+    auto phase = themePhase(index, altitude);
+    const auto &a = themes[phase.current], &b = themes[phase.next];
+    Theme t{a.name, mix(a.platform, b.platform, phase.blend), mix(a.ammo, b.ammo, phase.blend),
+        mix(a.danger, b.danger, phase.blend), mix(a.player, b.player, phase.blend),
+        mix(a.repair, b.repair, phase.blend), mix(a.brute, b.brute, phase.blend)};
+    cyan = t.platform; gold = t.ammo; red = t.danger; white = t.player;
+    repair = t.repair; brute = t.brute;
+    muted = dim(t.platform, 0.48); edge = dim(t.platform, 0.38);
+    shadow = dim(t.platform, 0.24); lavaDark = dim(t.danger, 0.42);
+  }
   struct Cell
   {
     RGB fg = white, bg = ink;
@@ -87,18 +136,16 @@ namespace
     }
     void bigNumber(int x, int y, int value, RGB color)
     {
-      static constexpr std::array<std::array<const char *, 5>, 10> digits{{
-          {{"###", "# #", "# #", "# #", "###"}},
-          {{" # ", "## ", " # ", " # ", "###"}},
-          {{"###", "  #", "###", "#  ", "###"}},
-          {{"###", "  #", "###", "  #", "###"}},
-          {{"# #", "# #", "###", "  #", "  #"}},
-          {{"###", "#  ", "###", "  #", "###"}},
-          {{"###", "#  ", "###", "# #", "###"}},
-          {{"###", "  #", "  #", "  #", "  #"}},
-          {{"###", "# #", "###", "# #", "###"}},
-          {{"###", "# #", "###", "  #", "###"}}
-      }};
+      static constexpr std::array<std::array<const char *, 5>, 10> digits{{{{"###", "# #", "# #", "# #", "###"}},
+                                                                           {{" # ", "## ", " # ", " # ", "###"}},
+                                                                           {{"###", "  #", "###", "#  ", "###"}},
+                                                                           {{"###", "  #", "###", "  #", "###"}},
+                                                                           {{"# #", "# #", "###", "  #", "  #"}},
+                                                                           {{"###", "#  ", "###", "  #", "###"}},
+                                                                           {{"###", "#  ", "###", "# #", "###"}},
+                                                                           {{"###", "  #", "  #", "  #", "  #"}},
+                                                                           {{"###", "# #", "###", "# #", "###"}},
+                                                                           {{"###", "# #", "###", "  #", "###"}}}};
       for (char digit : std::to_string(value))
       {
         for (int row = 0; row < 5; ++row)
@@ -126,10 +173,8 @@ namespace
         for (int row = 1; row <= 3; ++row)
           for (int col = 0; col < 3; ++col)
             block(right + i * 4 + col, y + row, i < g.player.shells ? gold : muted);
-      int progress = g.player.shells >= bb::Player::maxShells ? 12 :
-          std::clamp(static_cast<int>(g.player.reload / bb::Player::reloadSeconds * 12), 0, 12);
-      text(right, y + 4, (g.player.shells >= bb::Player::maxShells ? "READY  [" : "RELOAD [") +
-          std::string(static_cast<size_t>(progress), '=') + std::string(static_cast<size_t>(12 - progress), '.') + "]", gold);
+      int progress = g.player.shells >= bb::Player::maxShells ? 12 : std::clamp(static_cast<int>(g.player.reload / bb::Player::reloadSeconds * 12), 0, 12);
+      text(right, y + 4, (g.player.shells >= bb::Player::maxShells ? "READY  [" : "RELOAD [") + std::string(static_cast<size_t>(progress), '=') + std::string(static_cast<size_t>(12 - progress), '.') + "]", gold);
       centered(0, "BACKBLAST", cyan);
       text(2, 1, "BEST " + std::to_string(best) + " m", gold);
       centered(1, "HEIGHT " + std::to_string(g.score()) + " m", white);
@@ -144,8 +189,7 @@ namespace
       text(streakX, streakY, "STREAK", cyan);
       bigNumber(streakX, streakY + 2, g.combo, g.combo > 0 ? gold : muted);
       int remaining = std::clamp(static_cast<int>(g.comboTime / 2.0 * streakWidth), 0, streakWidth);
-      text(streakX, streakY + 8, std::string(static_cast<size_t>(remaining), '=') +
-          std::string(static_cast<size_t>(streakWidth - remaining), '.'), cyan);
+      text(streakX, streakY + 8, std::string(static_cast<size_t>(remaining), '=') + std::string(static_cast<size_t>(streakWidth - remaining), '.'), cyan);
     }
     void world(const bb::Game &g, Vec aim)
     {
@@ -155,16 +199,16 @@ namespace
           double wy = bottom + (pixelH - y) / scale;
           RGB c = ink;
           if (wy < g.lava)
-            c = (x + static_cast<int>(wy * 3 + g.time * 12)) % 7 < 3 ? red : RGB{119, 31, 66};
+            c = (x + static_cast<int>(wy * 3 + g.time * 12)) % 7 < 3 ? red : lavaDark;
           pixel(x, y, c);
         }
-      line({0, bottom}, {0, bottom + pixelH / scale}, {42, 80, 91});
-      line({bb::Game::width, bottom}, {bb::Game::width, bottom + pixelH / scale}, {42, 80, 91});
+      line({0, bottom}, {0, bottom + pixelH / scale}, edge);
+      line({bb::Game::width, bottom}, {bb::Game::width, bottom + pixelH / scale}, edge);
       for (const auto &p : g.platforms)
       {
         if (p.y < bottom - 2 || p.y > bottom + pixelH / scale + 2)
           continue;
-        line({p.x, p.y - 0.7}, {p.x + p.width, p.y - 0.7}, {35, 65, 82});
+        line({p.x, p.y - 0.7}, {p.x + p.width, p.y - 0.7}, shadow);
         line({p.x, p.y}, {p.x + p.width, p.y}, p.spikes ? red : cyan);
         if (p.spikes)
           for (double x = p.x; x < p.x + p.width; x += 2)
@@ -172,14 +216,14 @@ namespace
       }
       for (const auto &p : g.pickups)
       {
-        RGB c = p.type ? RGB{111, 255, 148} : gold;
+        RGB c = p.type ? repair : gold;
         Vec pos = p.pos + Vec{0, std::sin(g.time * 5 + p.pos.x) * 0.35};
         line(pos - Vec{1, 0}, pos + Vec{1, 0}, c);
         line(pos - Vec{0, 1}, pos + Vec{0, 1}, c);
       }
       for (const auto &e : g.enemies)
       {
-        dot(e.pos, e.radius, e.type == 2 ? RGB{163, 83, 255} : red);
+        dot(e.pos, e.radius, e.type == 2 ? brute : red);
         dot(e.pos + Vec{-0.4, 0.3}, 0, white);
         if (e.type == 2)
           line(e.pos - Vec{1.5, 2.8}, e.pos + Vec{-1.5 + 3 * e.hp / bb::Enemy::bruteHp, -2.8}, red);
@@ -190,18 +234,20 @@ namespace
       {
         RGB c = p.color == 0 ? gold : p.color == 1 ? cyan
                                   : p.color == 2   ? red
-                                                   : RGB{111, 255, 148};
+                                                   : repair;
         double fade = p.life / p.total;
         c = {int(c.r * fade), int(c.g * fade), int(c.b * fade)};
         dot(p.pos, 0, c);
       }
       Vec dir = (aim - g.player.pos).unit();
       for (int i = 3; i <= 10; i += 2)
-        dot(g.player.pos + dir * double(i), 0, {42, 80, 91});
+        dot(g.player.pos + dir * double(i), 0, edge);
       if (g.player.invulnerable <= 0 || static_cast<int>(g.time * 18) % 2 == 0)
       {
         dot(g.player.pos, 1.1, white);
-        line(g.player.pos, g.player.pos + dir * 2.6, g.flash > 0 ? gold : cyan);
+        line(g.player.pos, g.player.pos + dir * 2.6, gun);
+        if (g.flash > 0)
+          dot(g.player.pos + dir * 3.1, 0, gold);
         dot(g.player.pos + Vec{-0.25, 0.3}, 0, cyan);
       }
       line(aim - Vec{1.2, 0}, aim + Vec{1.2, 0}, gold);
@@ -274,6 +320,30 @@ namespace
     f >> n;
     return std::max(0, n);
   }
+  std::filesystem::path themePath()
+  {
+    auto score = scorePath();
+    return score.empty() ? std::filesystem::path{} : score.parent_path() / "theme";
+  }
+  size_t themeIndex(const std::string &name)
+  {
+    for (size_t i = 0; i < themes.size(); ++i)
+      if (name == themes[i].name) return i;
+    throw std::runtime_error("Unknown theme: " + name + " (use --list-themes)");
+  }
+  size_t loadTheme()
+  {
+    std::string name;
+    std::ifstream f(themePath()); f >> name;
+    try { return themeIndex(name); } catch (const std::exception &) { return 0; }
+  }
+  void saveTheme(size_t index)
+  {
+    auto path = themePath(); if (path.empty()) return;
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    if (!ec) { std::ofstream f(path); f << themes[index].name << '\n'; }
+  }
   void saveBest(int n)
   {
     auto p = scorePath();
@@ -299,6 +369,7 @@ int main(int argc, char **argv)
   try
   {
     uint32_t seed = std::random_device{}();
+    size_t theme = loadTheme();
     for (int i = 1; i < argc; ++i)
     {
       std::string a = argv[i];
@@ -311,11 +382,20 @@ int main(int argc, char **argv)
                   << "Safe landings add 2 ammo per touchdown, capped at 6.\n"
                   << "Firing resets reload progress. Platforms gradually slow sideways motion.\n"
                   << "Brute kills also instantly restore 1 HP. Enemies drop no pickups.\n"
-                  << "Usage: backblast [--seed NUMBER]\n"
+                  << "Themes advance every 500m, fading over the preceding 100m.\n"
+                  << "T / ]: next starting style   [: previous style (saved automatically)\n"
+                  << "Usage: backblast [--seed NUMBER] [--theme NAME] [--list-themes]\n"
                   << "Requires a mouse-capable UTF-8 terminal, at least 72 x 24.\n";
         return 0;
       }
-      if (a == "--seed" && i + 1 < argc)
+      if (a == "--list-themes")
+      {
+        for (const auto &t : themes) std::cout << t.name << '\n';
+        return 0;
+      }
+      if (a == "--theme" && i + 1 < argc)
+        theme = themeIndex(argv[++i]);
+      else if (a == "--seed" && i + 1 < argc)
       {
         std::string value = argv[++i];
         size_t used = 0;
@@ -327,6 +407,7 @@ int main(int argc, char **argv)
       else
         throw std::runtime_error("Unknown argument: " + a + " (use --help)");
     }
+    applyTheme(theme);
     std::signal(SIGINT, stop);
     std::signal(SIGTERM, stop);
     std::signal(SIGHUP, stop);
@@ -366,6 +447,11 @@ int main(int argc, char **argv)
           int key = e.key;
           if (key == 'q' || key == 'Q' || key == 3)
             running = 0;
+          if (key == 't' || key == 'T' || key == ']' || key == '[')
+          {
+            theme = (theme + (key == '[' ? themes.size() - 1 : 1)) % themes.size();
+            applyTheme(theme); saveTheme(theme);
+          }
           if (key == 'p' || key == 'P')
           {
             paused = !paused;
@@ -406,6 +492,7 @@ int main(int argc, char **argv)
         saveBest(best);
         savedBest = best;
       }
+      applyTheme(theme, game.altitude);
       Screen screen(std::max(6, terminal.columns), std::max(8, terminal.rows), game.camera);
       if (small)
       {
@@ -421,14 +508,17 @@ int main(int argc, char **argv)
           screen.bottom += std::sin(game.time * 130) * game.shake * 0.8;
         screen.world(game, aim);
         screen.hud(game, best);
-        screen.text(2, terminal.rows - 1, "MOUSE aim / LMB fire   P pause   R retry   Q quit", muted);
+        auto phase = themePhase(theme, game.altitude);
+        std::string style = themes[phase.current].name;
+        if (phase.blend > 0) style += ">" + std::string(themes[phase.next].name);
+        screen.text(2, terminal.rows - 1, "LMB fire  P pause  R retry  Q quit  T STYLE " + style, muted);
         if (!started)
           screen.panel(terminal.rows / 2 - 7, {"B A C K B L A S T", "RECOIL IS YOUR ONLY WAY UP", "",
                                                "Point DOWN. Hold LEFT CLICK. Fly UP.",
                                                "Aim sideways to bounce off the walls.",
                                                "Kills +3, landings +2. Stack ammo up to 6.",
                                                "Brute kills heal 1 HP. Enemies drop no items.",
-                                               "Gold + = shells / green + = repair.",
+                                               "Ammo + / repair + match your HUD colors.",
                                                "Shoot hunters. Chain kills. Outrun the meltdown.", "",
                                                "CLICK TO DROP IN  /  ENTER TO START"});
         else if (game.dead)

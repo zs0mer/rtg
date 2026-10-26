@@ -26,8 +26,8 @@ int main()
 {
   bb::Game g(42);
   check(g.platforms.size() > 10, "endless world generated at startup");
-    check(near(bb::Game::width, 100) && near(g.player.pos.x, bb::Game::width / 2),
-      "wider arena starts the player at its center");
+  check(near(bb::Game::width, 100) && near(g.player.pos.x, bb::Game::width / 2),
+        "wider arena starts the player at its center");
   check(g.player.shells == 4 && g.player.hp == 3, "fresh player has maximum four shells");
   check(g.shoot(g.player.pos + bb::Vec{0, -10}), "first blast fires");
   check(near(g.player.vel.y, 25), "downward aim produces upward recoil");
@@ -120,7 +120,10 @@ int main()
   for (bool right : {false, true})
     for (double vertical : {-20.0, 20.0})
     {
-      g.reset(42); g.platforms.clear(); g.enemies.clear(); g.pickups.clear();
+      g.reset(42);
+      g.platforms.clear();
+      g.enemies.clear();
+      g.pickups.clear();
       g.player.pos = {right ? bb::Game::width - 1 : 1, 30};
       g.player.vel = {right ? 30.0 : -30.0, vertical};
       g.update(1.0 / 120);
@@ -141,7 +144,8 @@ int main()
   check(g.player.shells == 3, "enemy kill instantly restores exactly three shells at range");
   check(g.combo == 1 && g.comboTime > 1.8 && g.comboTime <= 2, "enemy destruction starts the streak and its two-second timer");
   g.comboTime = 0.5;
-  g.enemies.clear(); g.bullets.clear();
+  g.enemies.clear();
+  g.bullets.clear();
   g.enemies.push_back({{40, 20}, {}, 1, 1.25, 0, 100, 0});
   g.bullets.push_back({{40, 20}, {}, 0.3, false});
   g.update(1.0 / 120);
@@ -149,7 +153,9 @@ int main()
   for (double offset : {1.72, 1.90})
   {
     g.reset(42);
-    g.platforms.clear(); g.enemies.clear(); g.pickups.clear();
+    g.platforms.clear();
+    g.enemies.clear();
+    g.pickups.clear();
     g.player.pos = {40, 30};
     g.enemies.push_back({{40, 20}, {}, 3, 1.25, 0, 100, 0});
     g.bullets.push_back({{40 + offset, 20}, {}, 0.3, false});
@@ -268,11 +274,13 @@ int main()
       check(e.type != 2 || e.pos.y - 3 > 1000, "brutes only spawn above 1000 meters");
       if (e.type != 2)
         check(near(e.radius, 1.25), "regular enemies keep their normal size at every height");
-      if (e.pos.y >= 30 && e.pos.y < 270) ++earlyEnemies;
+      if (e.pos.y >= 30 && e.pos.y < 270)
+        ++earlyEnemies;
       if (e.pos.y >= 1500 && e.pos.y < 1740)
       {
         ++lateEnemies;
-        if (e.type == 2) ++lateBrutes;
+        if (e.type == 2)
+          ++lateBrutes;
       }
     }
   }

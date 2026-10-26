@@ -30,6 +30,32 @@ use a direct terminal if it intercepts clicks. This is a terminal game, not a GU
 | P | Pause / resume |
 | R / Enter after death | Instantly retry the same course |
 | Q / Ctrl-C | Quit |
+| T / ] | Next neon style |
+| [ | Previous neon style |
+
+## Neon styles
+
+Ten coordinated true-color palettes recolor platforms, walls, enemies, brutes,
+pellets, particles, lava, crosshair, and HUD: **reactor**, **synthwave**, **acid**,
+**glacier**, **inferno**, **sakura**, **ultraviolet**, **outrun**, **matrix**, and
+**prism**. Cycle with **T** at any time, including on the start, pause, and death
+screens. The current style appears in the bottom control strip.
+
+Themes automatically advance every **500m of maximum height**, smoothly blending
+all colors during the final **100m** before each milestone (400–500m,
+900–1,000m, and so on). The palette holds steady between fades and cycles through
+all ten styles. Falling does not reverse the transition. Retry returns to your
+selected starting style; automatic changes do not overwrite that preference.
+
+Launch with **`nix run . -- --theme synthwave`**, or list available styles with
+**`nix run . -- --list-themes`**. Cycling saves your preference alongside your
+height record; the next launch restores it. Styles preserve the terminal's
+transparent background and never change physics, enemies, or scoring.
+
+Platform, ammo, danger, repair, and brute colors vary with the style; their
+shapes and HUD labels stay the same so they remain identifiable.
+
+## Gameplay
 
 **Aim DOWN to fly UP.** Shooting pushes you opposite your aim. Aim diagonally
 down to cross gaps, sideways to ricochet off walls, and up to brake an ascent or

@@ -25,7 +25,7 @@ def run(binary, interrupt=False):
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 38, 110, 0, 0))
     with tempfile.TemporaryDirectory() as state:
         proc = subprocess.Popen(
-            [binary, "--seed", "42"], stdin=slave, stdout=slave, stderr=slave,
+            [binary, "--seed", "42", "--theme", "reactor"], stdin=slave, stdout=slave, stderr=slave,
             env={**os.environ, "XDG_STATE_HOME": state},
         )
         output = bytearray()
@@ -51,6 +51,17 @@ def run(binary, interrupt=False):
         try:
             until(b"CLICK TO DROP IN")
             until(b"READY  [")
+            until(b"T STYLE reactor")
+            for name in ("synthwave", "acid", "glacier", "inferno", "sakura",
+                         "ultraviolet", "outrun", "matrix", "prism", "reactor"):
+                os.write(master, b"t")
+                until(b"T STYLE " + name.encode())
+            os.write(master, b"[")
+            until(b"T STYLE prism")
+            with open(os.path.join(state, "backblast", "theme")) as saved:
+                check(saved.read().strip() == "prism", "style preference was not saved")
+            os.write(master, b"]")
+            until(b"T STYLE reactor")
             check(b"\033[49m" in output, "terminal default background is not used")
             plain = re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]", b"", bytes(output))
             check(b"HP" in plain and b"AMMO" in plain and "▀".encode() in plain,
@@ -105,6 +116,10 @@ def run(binary, interrupt=False):
 
 if __name__ == "__main__":
     binary = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else "build/backblast")
+    styles = subprocess.check_output([binary, "--list-themes"], text=True).splitlines()
+    check(len(styles) == 10 and len(set(styles)) == 10, "ten unique styles must be available")
+    bad = subprocess.run([binary, "--theme", "not-a-style"], capture_output=True)
+    check(bad.returncode != 0 and b"Unknown theme" in bad.stderr, "invalid style was not rejected")
     run(binary)
     run(binary, interrupt=True)
     print("PASS: start, mouse fire, pause/resume, resize, retry, quit, SIGINT, persistence, terminal restoration")
