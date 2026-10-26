@@ -52,6 +52,9 @@ def run(binary, interrupt=False):
             until(b"CLICK TO DROP IN")
             until(b"READY  [")
             until(b"T STYLE reactor")
+            for name in (b"LONGSHOT", b"SCATTER", b"NORMAL"):
+                os.write(master, b"s")
+                until(name)
             for name in ("synthwave", "acid", "glacier", "inferno", "sakura",
                          "ultraviolet", "outrun", "matrix", "prism", "reactor"):
                 os.write(master, b"t")

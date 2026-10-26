@@ -21,6 +21,7 @@ namespace bb
   {
     rng.seed(seed);
     player = Player{};
+    shotMode = ShotMode::Normal;
     player.pos.x = width / 2;
     platforms = {{width / 2 - 15, 1, 30, false}};
     enemies.clear();
@@ -43,12 +44,26 @@ namespace bb
       particles.push_back({pos, Vec{std::cos(a), std::sin(a)} * random(speed * 0.2, speed), life, life, color});
     }
   }
+  void Game::cycleShotMode()
+  {
+    shotMode = static_cast<ShotMode>((static_cast<int>(shotMode) + 1) % 3);
+  }
+  const char *Game::shotModeName() const
+  {
+    switch (shotMode)
+    {
+      case ShotMode::Longshot: return "LONGSHOT";
+      case ShotMode::Scatter: return "SCATTER";
+      default: return "NORMAL";
+    }
+  }
   bool Game::shoot(Vec target)
   {
     if (dead || player.cooldown > 0 || player.shells <= 0)
       return false;
     Vec aim = (target - player.pos).unit();
-    player.vel += aim * -25;
+    double recoil = 25 * (shotMode == ShotMode::Longshot ? 1.1 : shotMode == ShotMode::Scatter ? 0.9 : 1.0);
+    player.vel += aim * -recoil;
     // Preserve momentum, but keep repeated blasts controllable.
     double speed = player.vel.length();
     if (speed > 57)
@@ -59,10 +74,17 @@ namespace bb
     shake = 0.23;
     flash = 0.065;
     double angle = std::atan2(aim.y, aim.x);
-    for (int i = 0; i < 10; ++i)
+    int count = shotMode == ShotMode::Longshot ? 2 : shotMode == ShotMode::Scatter ? 24 : 10;
+    double spread = shotMode == ShotMode::Longshot ? 0.025 : shotMode == ShotMode::Scatter ? 0.48 : 0.19;
+    double life = shotMode == ShotMode::Longshot ? 0.9 : shotMode == ShotMode::Scatter ? 0.14 : 0.34;
+    auto killRecoil = shotMode == ShotMode::Scatter ?
+      std::make_shared<KillRecoil>(KillRecoil{aim * (-25 * 0.85), false}) : nullptr;
+    for (int i = 0; i < count; ++i)
     {
-      double a = angle + random(-0.19, 0.19);
-      bullets.push_back({player.pos + aim * 1.1, Vec{std::cos(a), std::sin(a)} * random(95, 125), 0.34, false});
+      double a = angle + random(-spread, spread);
+      double velocity = shotMode == ShotMode::Longshot ? random(155, 165) : random(95, 125);
+        bullets.push_back({player.pos + aim * 1.1, Vec{std::cos(a), std::sin(a)} * velocity, life, false, killRecoil,
+          shotMode == ShotMode::Longshot ? 2.5 : 0.55});
     }
     burst(player.pos + aim * 1.5, 10, 0, 17);
     return true;
@@ -100,7 +122,7 @@ namespace bb
       {
         int type = generated > 1003 && random(0, 1) < 0.16 ? 2 : (difficulty >= 2 && random(0, 1) < 0.45 ? 1 : 0);
         double r = type == 2 ? 2.3 : 1.25;
-        enemies.push_back({{random(8, width - 8), generated + 4}, {}, type == 2 ? Enemy::bruteHp : 3.0, r, random(0, 6.28), random(1, 3), type});
+        enemies.push_back({{random(8, width - 8), generated + 4}, {}, type == 2 ? Enemy::bruteHp : 1.0, r, random(0, 6.28), random(1, 3), type});
       }
       if (random(0, 1) < 0.3)
         pickups.push_back({{x + w / 2, generated + 2.5}, random(0, 1) < 0.23 ? 1 : 0});
@@ -229,7 +251,7 @@ namespace bb
       {
         for (auto &e : enemies)
         {
-          if (e.hp <= 0 || segmentDistance(e.pos, before, b.pos) > e.radius + 0.55)
+          if (e.hp <= 0 || segmentDistance(e.pos, before, b.pos) > e.radius + b.hitRadius)
             continue;
           e.hp -= 1;
           e.vel += b.vel * 0.08;
@@ -237,6 +259,14 @@ namespace bb
           burst(b.pos, 4, 0, 10);
           if (e.hp <= 0)
           {
+            if (b.killRecoil && !b.killRecoil->used)
+            {
+              b.killRecoil->used = true;
+              player.vel += b.killRecoil->impulse;
+              double speed = player.vel.length();
+              if (speed > 57) player.vel = player.vel * (57 / speed);
+              shake = 0.23;
+            }
             player.shells = std::min(Player::maxBonusShells, player.shells + 3);
             player.reload = 0;
             if (e.type == 2)

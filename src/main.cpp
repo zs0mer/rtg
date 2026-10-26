@@ -169,6 +169,8 @@ namespace
       }
       int right = w - 26;
       text(right, y, "AMMO", gold);
+      text(24, y, "S MODE", cyan);
+      text(24, y + 1, g.shotModeName(), gold);
       for (int i = 0; i < bb::Player::maxBonusShells; ++i)
         for (int row = 1; row <= 3; ++row)
           for (int col = 0; col < 3; ++col)
@@ -378,6 +380,7 @@ int main(int argc, char **argv)
         std::cout << "BACKBLAST - endless recoil-only terminal platformer\n\n"
                   << "Aim with mouse. Hold left click to fire. Aim DOWN to fly UP.\n"
                   << "P: pause   R: restart   Q / Ctrl-C: quit   Enter: start\n"
+                  << "S: cycle NORMAL / LONGSHOT (2 long-range pellets) / SCATTER (24 short-range pellets)\n"
                   << "Reload 1 shell per 0.75s up to 4; kills add 3 up to 6.\n"
                   << "Safe landings add 2 ammo per touchdown, capped at 6.\n"
                   << "Firing resets reload progress. Platforms gradually slow sideways motion.\n"
@@ -447,6 +450,8 @@ int main(int argc, char **argv)
           int key = e.key;
           if (key == 'q' || key == 'Q' || key == 3)
             running = 0;
+          if (key == 's' || key == 'S')
+            game.cycleShotMode();
           if (key == 't' || key == 'T' || key == ']' || key == '[')
           {
             theme = (theme + (key == '[' ? themes.size() - 1 : 1)) % themes.size();

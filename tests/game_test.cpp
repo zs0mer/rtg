@@ -25,6 +25,72 @@ namespace
 int main()
 {
   bb::Game g(42);
+  for (double offset : {3.5, 4.0})
+  {
+    bb::Game hitbox(42);
+    hitbox.platforms.clear(); hitbox.enemies.clear(); hitbox.pickups.clear();
+    hitbox.player.pos = {50, 30};
+    hitbox.shotMode = bb::ShotMode::Longshot;
+    hitbox.shoot({50, 20});
+    hitbox.bullets.resize(1);
+    hitbox.bullets.front().pos = {40 + offset, 20};
+    hitbox.bullets.front().vel = {};
+    hitbox.enemies.push_back({{40, 20}, {}, 3, 1.25, 0, 100, 0});
+    hitbox.shotMode = bb::ShotMode::Normal;
+    hitbox.update(1.0 / 120);
+    check(near(hitbox.enemies.front().hp, offset < 3.75 ? 2 : 3),
+          "longshot's wide hitbox persists after switching modes and still has a finite boundary");
+  }
+  for (bool scatter : {false, true})
+  {
+    bb::Game recoil(42);
+    recoil.platforms.clear(); recoil.enemies.clear(); recoil.pickups.clear();
+    recoil.player.pos = {50, 30};
+    recoil.shotMode = scatter ? bb::ShotMode::Scatter : bb::ShotMode::Normal;
+    recoil.shoot({50, 20});
+    // Two separate kills from the same blast must grant only one recoil bonus.
+    recoil.bullets.resize(2);
+    for (int i = 0; i < 2; ++i)
+    {
+      bb::Vec pos{40.0 + i * 20, 20};
+      recoil.enemies.push_back({pos, {}, 1, 1.25, 0, 100, 0});
+      recoil.bullets[static_cast<size_t>(i)].pos = pos;
+      recoil.bullets[static_cast<size_t>(i)].vel = {};
+    }
+    recoil.shotMode = bb::ShotMode::Longshot;
+    recoil.update(1.0 / 120);
+    check(recoil.kills == 2, "recoil test blast kills two enemies");
+        check(near(recoil.player.vel.y, (scatter ? 22.5 : 25) - bb::Game::gravity / 120 + (scatter ? 21.25 : 0)),
+          "scatter kill brings total recoil to 1.75x once per blast even after mode switching");
+  }
+  {
+    bb::Game modes(42);
+    for (int mode = 0; mode < 3; ++mode)
+    {
+      modes.player = bb::Player{};
+      modes.bullets.clear();
+      check(static_cast<int>(modes.shotMode) == mode, "shot mode cycles in expected order");
+      check(modes.shoot(modes.player.pos + bb::Vec{10, 0}), "each mode can shoot");
+      check(modes.bullets.size() == static_cast<size_t>(mode == 1 ? 2 : mode == 2 ? 24 : 10),
+            "shot pattern has the correct pellet count");
+      check(modes.player.shells == 3 && near(modes.player.vel.x, mode == 1 ? -27.5 : mode == 2 ? -22.5 : -25),
+        "modes use one ammo with 1.1x longshot and 0.9x scatter firing recoil");
+      for (const auto &pellet : modes.bullets)
+      {
+        check(near(pellet.hitRadius, mode == 1 ? 2.5 : 0.55), "only longshot gets a much larger hit radius");
+        double range = pellet.vel.length() * pellet.life;
+        check(mode == 1 ? range > 139 && range < 150 : mode == 2 ? range > 13 && range < 18 : range > 32 && range < 43,
+              "each firing pattern has its intended range");
+        if (mode == 1)
+          check(std::abs(std::atan2(pellet.vel.y, pellet.vel.x)) <= 0.025, "longshot has a tight spread");
+      }
+      modes.cycleShotMode();
+      check(!modes.shoot(modes.player.pos + bb::Vec{10, 0}), "mode switching cannot bypass cooldown");
+    }
+    check(modes.shotMode == bb::ShotMode::Normal, "shot modes wrap back to normal");
+    modes.cycleShotMode(); modes.reset(42);
+    check(modes.shotMode == bb::ShotMode::Normal, "retry resets shot mode");
+  }
   check(g.platforms.size() > 10, "endless world generated at startup");
   check(near(bb::Game::width, 100) && near(g.player.pos.x, bb::Game::width / 2),
         "wider arena starts the player at its center");
@@ -273,7 +339,10 @@ int main()
     {
       check(e.type != 2 || e.pos.y - 3 > 1000, "brutes only spawn above 1000 meters");
       if (e.type != 2)
+      {
         check(near(e.radius, 1.25), "regular enemies keep their normal size at every height");
+        check(near(e.hp, 1), "all regular enemy types die from one pellet at every height");
+      }
       if (e.pos.y >= 30 && e.pos.y < 270)
         ++earlyEnemies;
       if (e.pos.y >= 1500 && e.pos.y < 1740)

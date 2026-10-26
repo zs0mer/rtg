@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <memory>
 #include <random>
 #include <string>
 #include <vector>
@@ -39,11 +40,18 @@ namespace bb
     double hp, radius, phase, cooldown;
     int type;
   };
+  struct KillRecoil
+  {
+    Vec impulse;
+    bool used = false;
+  };
   struct Bullet
   {
     Vec pos, vel;
     double life;
     bool hostile;
+    std::shared_ptr<KillRecoil> killRecoil = nullptr;
+    double hitRadius = 0.55;
   };
   struct Particle
   {
@@ -65,11 +73,13 @@ namespace bb
     int hp = 3, shells = maxShells;
     double cooldown = 0, reload = 0, invulnerable = 0;
   };
+  enum class ShotMode { Normal, Longshot, Scatter };
   class Game
   {
   public:
     static constexpr double width = 100, gravity = 34, radius = 0.85;
     Player player;
+    ShotMode shotMode = ShotMode::Normal;
     std::vector<Platform> platforms;
     std::vector<Enemy> enemies;
     std::vector<Bullet> bullets;
@@ -83,6 +93,8 @@ namespace bb
     explicit Game(uint32_t seed = std::random_device{}());
     void reset(uint32_t seed);
     bool shoot(Vec target);
+    void cycleShotMode();
+    const char *shotModeName() const;
     void update(double dt);
     void generate(double top);
     int score() const { return static_cast<int>(altitude); }

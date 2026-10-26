@@ -26,6 +26,7 @@ use a direct terminal if it intercepts clicks. This is a terminal game, not a GU
 | --- | --- |
 | Mouse | Aim the shotgun |
 | Hold left mouse button | Fire repeatedly |
+| S | Cycle normal / longshot / scatter |
 | Enter / click | Start immediately |
 | P | Pause / resume |
 | R / Enter after death | Instantly retry the same course |
@@ -57,6 +58,22 @@ shapes and HUD labels stay the same so they remain identifiable.
 
 ## Gameplay
 
+**Shotgun modes:** press **S** to cycle. The current mode appears beside the
+bottom HUD. Each blast costs one ammo, deals one damage per pellet, and retains
+the same firing cooldown. Longshot has **1.1×** normal recoil. Scatter fires with
+**0.9×** recoil; if its pellets kill an enemy, an extra **0.85×** recoil impulse
+in the original recoil direction brings that blast's total to **1.75×**.
+The bonus triggers once per blast, even if it kills multiple enemies, and still
+applies if you switch modes before the pellets hit. The usual speed cap remains.
+
+- **NORMAL:** 10 pellets, standard spread and roughly 32–43 units of range.
+- **LONGSHOT:** 2 tightly grouped pellets, roughly 140–149 units of range,
+  with a generous 2.5-unit hit radius (versus 0.55 for other player pellets).
+- **SCATTER:** 24 pellets, wide spread but only roughly 13–18 units of range.
+
+Switching modes does not refill ammo or bypass the firing cooldown. Retry resets
+the mode to normal.
+
 **Aim DOWN to fly UP.** Shooting pushes you opposite your aim. Aim diagonally
 down to cross gaps, sideways to ricochet off walls, and up to brake an ascent or
 dive onto a platform. There are deliberately no movement keys or jump button.
@@ -81,6 +98,7 @@ spawns spread across the full width.
   Enemy density increases gradually with altitude, with a slower ramp toward
   late-run pressure. Regular enemies keep their normal size at every altitude;
   difficulty ramps through spawn frequency instead of size.
+  All regular enemies die from a single pellet hit.
   Rare 12-HP violet brutes only spawn above **1,000m**.
   Shotgun pellets have a small extra collision margin to make near-grazes fairer;
   enemy projectile hitboxes are unchanged.
