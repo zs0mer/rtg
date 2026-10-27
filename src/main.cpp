@@ -27,21 +27,23 @@ namespace
     const char *name;
     RGB platform, ammo, danger, player, repair, brute;
   };
-  constexpr std::array<Theme, 10> themes{{
-      {"reactor", {40,255,220}, {255,215,60}, {255,65,110}, {225,255,250}, {100,255,140}, {190,85,255}},
-      {"synthwave", {0,235,255}, {255,80,230}, {255,105,65}, {255,230,255}, {150,255,100}, {165,100,255}},
-      {"acid", {170,255,0}, {255,245,40}, {255,55,150}, {240,255,205}, {0,255,175}, {200,80,255}},
-      {"glacier", {70,180,255}, {90,255,245}, {255,85,145}, {235,250,255}, {135,255,180}, {175,125,255}},
-      {"inferno", {255,120,20}, {255,225,65}, {255,45,100}, {255,245,205}, {90,255,165}, {235,65,255}},
-      {"sakura", {255,105,210}, {100,245,255}, {255,90,65}, {255,235,250}, {155,255,150}, {180,100,255}},
-      {"ultraviolet", {170,90,255}, {75,255,230}, {255,70,130}, {245,235,255}, {165,255,80}, {255,125,235}},
-      {"outrun", {255,65,170}, {255,185,40}, {255,80,65}, {255,240,250}, {50,255,185}, {110,130,255}},
-      {"matrix", {30,255,100}, {195,255,55}, {255,90,110}, {220,255,230}, {70,255,225}, {190,105,255}},
-      {"prism", {65,210,255}, {255,235,70}, {255,65,155}, {245,250,255}, {90,255,150}, {190,100,255}}
-  }};
+  constexpr std::array<Theme, 10> themes{{{"reactor", {40, 255, 220}, {255, 215, 60}, {255, 65, 110}, {225, 255, 250}, {100, 255, 140}, {190, 85, 255}},
+                                          {"synthwave", {0, 235, 255}, {255, 80, 230}, {255, 105, 65}, {255, 230, 255}, {150, 255, 100}, {165, 100, 255}},
+                                          {"acid", {170, 255, 0}, {255, 245, 40}, {255, 55, 150}, {240, 255, 205}, {0, 255, 175}, {200, 80, 255}},
+                                          {"glacier", {70, 180, 255}, {90, 255, 245}, {255, 85, 145}, {235, 250, 255}, {135, 255, 180}, {175, 125, 255}},
+                                          {"inferno", {255, 120, 20}, {255, 225, 65}, {255, 45, 100}, {255, 245, 205}, {90, 255, 165}, {235, 65, 255}},
+                                          {"sakura", {255, 105, 210}, {100, 245, 255}, {255, 90, 65}, {255, 235, 250}, {155, 255, 150}, {180, 100, 255}},
+                                          {"ultraviolet", {170, 90, 255}, {75, 255, 230}, {255, 70, 130}, {245, 235, 255}, {165, 255, 80}, {255, 125, 235}},
+                                          {"outrun", {255, 65, 170}, {255, 185, 40}, {255, 80, 65}, {255, 240, 250}, {50, 255, 185}, {110, 130, 255}},
+                                          {"matrix", {30, 255, 100}, {195, 255, 55}, {255, 90, 110}, {220, 255, 230}, {70, 255, 225}, {190, 105, 255}},
+                                          {"prism", {65, 210, 255}, {255, 235, 70}, {255, 65, 155}, {245, 250, 255}, {90, 255, 150}, {190, 100, 255}}}};
   RGB cyan, gold, red, white, muted, repair, brute, edge, shadow, lavaDark;
   RGB dim(RGB c, double factor) { return {int(c.r * factor), int(c.g * factor), int(c.b * factor)}; }
-  struct ThemePhase { size_t current, next; double blend; };
+  struct ThemePhase
+  {
+    size_t current, next;
+    double blend;
+  };
   constexpr ThemePhase themePhase(size_t base, double altitude)
   {
     double height = std::max(0.0, altitude);
@@ -64,12 +66,18 @@ namespace
     auto phase = themePhase(index, altitude);
     const auto &a = themes[phase.current], &b = themes[phase.next];
     Theme t{a.name, mix(a.platform, b.platform, phase.blend), mix(a.ammo, b.ammo, phase.blend),
-        mix(a.danger, b.danger, phase.blend), mix(a.player, b.player, phase.blend),
-        mix(a.repair, b.repair, phase.blend), mix(a.brute, b.brute, phase.blend)};
-    cyan = t.platform; gold = t.ammo; red = t.danger; white = t.player;
-    repair = t.repair; brute = t.brute;
-    muted = dim(t.platform, 0.48); edge = dim(t.platform, 0.38);
-    shadow = dim(t.platform, 0.24); lavaDark = dim(t.danger, 0.42);
+            mix(a.danger, b.danger, phase.blend), mix(a.player, b.player, phase.blend),
+            mix(a.repair, b.repair, phase.blend), mix(a.brute, b.brute, phase.blend)};
+    cyan = t.platform;
+    gold = t.ammo;
+    red = t.danger;
+    white = t.player;
+    repair = t.repair;
+    brute = t.brute;
+    muted = dim(t.platform, 0.48);
+    edge = dim(t.platform, 0.38);
+    shadow = dim(t.platform, 0.24);
+    lavaDark = dim(t.danger, 0.42);
   }
   struct Cell
   {
@@ -169,7 +177,7 @@ namespace
       }
       int right = w - 26;
       text(right, y, "AMMO", gold);
-      text(24, y, "S MODE", cyan);
+      text(24, y, "MODE", cyan);
       text(24, y + 1, g.shotModeName(), gold);
       for (int i = 0; i < bb::Player::maxBonusShells; ++i)
         for (int row = 1; row <= 3; ++row)
@@ -216,6 +224,16 @@ namespace
           for (double x = p.x; x < p.x + p.width; x += 2)
             dot({x, p.y + 0.7}, 0, red);
       }
+      if (g.modeTarget.y + 9 >= bottom && g.modeTarget.y - 9 <= bottom + pixelH / scale)
+      {
+        double pulse = 0.5 + 0.5 * std::sin(g.time * 5);
+        RGB glow = g.modeTargetCooldown > 0 ? muted : cyan;
+        RGB halo{int(glow.r * (0.18 + pulse * 0.12)), int(glow.g * (0.18 + pulse * 0.12)), int(glow.b * (0.18 + pulse * 0.12))};
+        dot(g.modeTarget, bb::Game::modeTargetRadius + 2 + pulse, halo);
+        dot(g.modeTarget, bb::Game::modeTargetRadius, glow);
+        dot(g.modeTarget, bb::Game::modeTargetRadius - 1.5, shadow);
+        dot(g.modeTarget, 2 + pulse * 0.5, g.modeTargetCooldown > 0 ? muted : white);
+      }
       for (const auto &p : g.pickups)
       {
         RGB c = p.type ? repair : gold;
@@ -254,6 +272,21 @@ namespace
       }
       line(aim - Vec{1.2, 0}, aim + Vec{1.2, 0}, gold);
       line(aim - Vec{0, 1.2}, aim + Vec{0, 1.2}, gold);
+      // Warn at the actual horizontal entry point, using the same world mapping.
+      // Only show nearby enemies whose entire body is still above the viewport.
+      double top = bottom + (pixelH - 1) / scale;
+      for (const auto &e : g.enemies)
+      {
+        double gap = e.pos.y - e.radius - top;
+        if (e.hp <= 0 || gap <= 0 || gap > 30)
+          continue;
+        auto [x, y] = point(e.pos);
+        (void)y;
+        RGB warning = e.type == 2 ? brute : red;
+        for (int offset = -1; offset <= 1; ++offset)
+          pixel(x + offset, 0, warning);
+        pixel(x, 1, warning);
+      }
       for (int y = 0; y < pixelH / 2; ++y)
         for (int x = 0; x < w - 4; ++x)
         {
@@ -330,21 +363,36 @@ namespace
   size_t themeIndex(const std::string &name)
   {
     for (size_t i = 0; i < themes.size(); ++i)
-      if (name == themes[i].name) return i;
+      if (name == themes[i].name)
+        return i;
     throw std::runtime_error("Unknown theme: " + name + " (use --list-themes)");
   }
   size_t loadTheme()
   {
     std::string name;
-    std::ifstream f(themePath()); f >> name;
-    try { return themeIndex(name); } catch (const std::exception &) { return 0; }
+    std::ifstream f(themePath());
+    f >> name;
+    try
+    {
+      return themeIndex(name);
+    }
+    catch (const std::exception &)
+    {
+      return 0;
+    }
   }
   void saveTheme(size_t index)
   {
-    auto path = themePath(); if (path.empty()) return;
+    auto path = themePath();
+    if (path.empty())
+      return;
     std::error_code ec;
     std::filesystem::create_directories(path.parent_path(), ec);
-    if (!ec) { std::ofstream f(path); f << themes[index].name << '\n'; }
+    if (!ec)
+    {
+      std::ofstream f(path);
+      f << themes[index].name << '\n';
+    }
   }
   void saveBest(int n)
   {
@@ -380,9 +428,9 @@ int main(int argc, char **argv)
         std::cout << "BACKBLAST - endless recoil-only terminal platformer\n\n"
                   << "Aim with mouse. Hold left click to fire. Aim DOWN to fly UP.\n"
                   << "P: pause   R: restart   Q / Ctrl-C: quit   Enter: start\n"
-                  << "S: cycle NORMAL / LONGSHOT (2 long-range pellets) / SCATTER (24 short-range pellets)\n"
+                  << "Shoot glowing circles to change gun mode: first at 750-1000m, then every 1000-1500m.\n"
                   << "Reload 1 shell per 0.75s up to 4; kills add 3 up to 6.\n"
-                  << "Safe landings add 2 ammo per touchdown, capped at 6.\n"
+                  << "Safe landings add 2 ammo up to 4, preserving existing bonus ammo.\n"
                   << "Firing resets reload progress. Platforms gradually slow sideways motion.\n"
                   << "Brute kills also instantly restore 1 HP. Enemies drop no pickups.\n"
                   << "Themes advance every 500m, fading over the preceding 100m.\n"
@@ -393,7 +441,8 @@ int main(int argc, char **argv)
       }
       if (a == "--list-themes")
       {
-        for (const auto &t : themes) std::cout << t.name << '\n';
+        for (const auto &t : themes)
+          std::cout << t.name << '\n';
         return 0;
       }
       if (a == "--theme" && i + 1 < argc)
@@ -450,12 +499,11 @@ int main(int argc, char **argv)
           int key = e.key;
           if (key == 'q' || key == 'Q' || key == 3)
             running = 0;
-          if (key == 's' || key == 'S')
-            game.cycleShotMode();
           if (key == 't' || key == 'T' || key == ']' || key == '[')
           {
             theme = (theme + (key == '[' ? themes.size() - 1 : 1)) % themes.size();
-            applyTheme(theme); saveTheme(theme);
+            applyTheme(theme);
+            saveTheme(theme);
           }
           if (key == 'p' || key == 'P')
           {
@@ -515,13 +563,14 @@ int main(int argc, char **argv)
         screen.hud(game, best);
         auto phase = themePhase(theme, game.altitude);
         std::string style = themes[phase.current].name;
-        if (phase.blend > 0) style += ">" + std::string(themes[phase.next].name);
+        if (phase.blend > 0)
+          style += ">" + std::string(themes[phase.next].name);
         screen.text(2, terminal.rows - 1, "LMB fire  P pause  R retry  Q quit  T STYLE " + style, muted);
         if (!started)
           screen.panel(terminal.rows / 2 - 7, {"B A C K B L A S T", "RECOIL IS YOUR ONLY WAY UP", "",
                                                "Point DOWN. Hold LEFT CLICK. Fly UP.",
                                                "Aim sideways to bounce off the walls.",
-                                               "Kills +3, landings +2. Stack ammo up to 6.",
+                                               "Kills +3 up to 6. Landings +2 up to 4.",
                                                "Brute kills heal 1 HP. Enemies drop no items.",
                                                "Ammo + / repair + match your HUD colors.",
                                                "Shoot hunters. Chain kills. Outrun the meltdown.", "",

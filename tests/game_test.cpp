@@ -25,10 +25,102 @@ namespace
 int main()
 {
   bb::Game g(42);
+  {
+    bb::Game recurring(42), matching(42);
+    double previousGap = 0;
+    bool varied = false;
+    for (int i = 0; i < 12; ++i)
+    {
+      double previous = recurring.modeTarget.y;
+      for (bb::Game *world : {&recurring, &matching})
+      {
+        world->platforms.clear();
+        world->enemies.clear();
+        world->pickups.clear();
+        world->player.pos = world->modeTarget + bb::Vec{20, 0};
+        world->player.vel = {};
+        world->update(1.0 / 120);
+        check(near(world->modeTarget.y, previous), "circle stays in place while nearby");
+        world->player.pos.y = previous + 70;
+        world->player.vel = {};
+        world->modeTargetCooldown = 1;
+        world->update(1.0 / 120);
+      }
+      double gap = recurring.modeTarget.y - previous;
+      check(gap >= 1000 && gap <= 1500, "successive circles are spaced 1000-1500 meters apart even when skipped");
+      check(near(recurring.modeTarget.y, matching.modeTarget.y), "seeded circle spacing is reproducible");
+      check(near(recurring.modeTargetCooldown, 0), "new circle starts ready to shoot");
+      varied = varied || (i > 0 && !near(gap, previousGap));
+      previousGap = gap;
+    }
+    check(varied, "circle intervals vary rather than using a fixed spacing");
+    recurring.reset(42);
+    check(near(recurring.modeTarget.y, g.modeTarget.y), "retry restores the seeded first circle height");
+  }
+  bool variedFirstHeight = false;
+  for (unsigned seed = 0; seed < 60; ++seed)
+  {
+    bb::Game first(seed);
+    double height = first.modeTarget.y - 3;
+    check(height >= 750 && height <= 1000, "first circle spawns between displayed heights 750 and 1000m");
+    variedFirstHeight = variedFirstHeight || !near(first.modeTarget.y, g.modeTarget.y);
+  }
+  check(variedFirstHeight, "first circle height varies between seeds");
+  for (int mode = 0; mode < 3; ++mode)
+  {
+    int outcomes[3]{};
+    for (unsigned seed = 0; seed < 60; ++seed)
+    {
+      bb::Game target(seed);
+      target.generate(1450);
+      target.platforms.clear();
+      target.enemies.clear();
+      target.pickups.clear();
+      target.player.pos = target.modeTarget + bb::Vec{20, 0};
+      target.shotMode = static_cast<bb::ShotMode>(mode);
+      target.player.shells = 2;
+      target.player.cooldown = 0.15;
+      // Player contact, hostile plasma and a near miss must not activate it.
+      target.bullets = {{target.modeTarget, {}, 1, true},
+                        {target.modeTarget + bb::Vec{0, 10}, {}, 1, false}};
+      target.update(1.0 / 120);
+      check(static_cast<int>(target.shotMode) == mode, "only a friendly shot hitting the circle switches modes");
+      target.bullets.clear();
+      target.player.pos = target.modeTarget;
+      target.update(1.0 / 120);
+      check(static_cast<int>(target.shotMode) == mode, "touching the circle does not switch modes");
+      double cooldown = target.player.cooldown;
+      // A fast pellet crosses the circle with both endpoints outside it.
+      target.bullets = {{target.modeTarget - bb::Vec{15, 0}, {3600, 0}, 0.5, false},
+                        {target.modeTarget, {}, 0.5, false}};
+      target.update(1.0 / 120);
+      int next = static_cast<int>(target.shotMode);
+      check(next != mode, "circle always selects a different gun mode");
+      ++outcomes[next];
+      check(target.bullets.empty() && target.modeTargetCooldown > 1,
+            "circle consumes hitting pellets and recharges after a single reroll");
+      check(target.player.shells == 2 && near(target.player.cooldown, cooldown - 1.0 / 120),
+            "circle does not refill ammo or bypass weapon cooldown");
+      target.bullets = {{target.modeTarget, {}, 0.5, false}};
+      target.update(1.0 / 120);
+      check(target.shotMode == static_cast<bb::ShotMode>(next), "later pellets cannot reroll during recharge");
+      advance(target, 1.3);
+      target.bullets = {{target.modeTarget, {}, 0.5, false}};
+      target.update(1.0 / 120);
+      check(target.shotMode != static_cast<bb::ShotMode>(next), "circle can be shot again after recharge");
+      target.reset(seed);
+      check(target.shotMode == bb::ShotMode::Normal && near(target.modeTargetCooldown, 0),
+            "retry resets both gun mode and circle recharge");
+    }
+    check(outcomes[(mode + 1) % 3] > 10 && outcomes[(mode + 2) % 3] > 10,
+          "circle randomly offers both alternate gun modes");
+  }
   for (double offset : {3.5, 4.0})
   {
     bb::Game hitbox(42);
-    hitbox.platforms.clear(); hitbox.enemies.clear(); hitbox.pickups.clear();
+    hitbox.platforms.clear();
+    hitbox.enemies.clear();
+    hitbox.pickups.clear();
     hitbox.player.pos = {50, 30};
     hitbox.shotMode = bb::ShotMode::Longshot;
     hitbox.shoot({50, 20});
@@ -44,7 +136,9 @@ int main()
   for (bool scatter : {false, true})
   {
     bb::Game recoil(42);
-    recoil.platforms.clear(); recoil.enemies.clear(); recoil.pickups.clear();
+    recoil.platforms.clear();
+    recoil.enemies.clear();
+    recoil.pickups.clear();
     recoil.player.pos = {50, 30};
     recoil.shotMode = scatter ? bb::ShotMode::Scatter : bb::ShotMode::Normal;
     recoil.shoot({50, 20});
@@ -60,7 +154,7 @@ int main()
     recoil.shotMode = bb::ShotMode::Longshot;
     recoil.update(1.0 / 120);
     check(recoil.kills == 2, "recoil test blast kills two enemies");
-        check(near(recoil.player.vel.y, (scatter ? 22.5 : 25) - bb::Game::gravity / 120 + (scatter ? 21.25 : 0)),
+    check(near(recoil.player.vel.y, (scatter ? 22.5 : 25) - bb::Game::gravity / 120 + (scatter ? 21.25 : 0)),
           "scatter kill brings total recoil to 1.75x once per blast even after mode switching");
   }
   {
@@ -69,26 +163,29 @@ int main()
     {
       modes.player = bb::Player{};
       modes.bullets.clear();
-      check(static_cast<int>(modes.shotMode) == mode, "shot mode cycles in expected order");
+      modes.shotMode = static_cast<bb::ShotMode>(mode);
       check(modes.shoot(modes.player.pos + bb::Vec{10, 0}), "each mode can shoot");
-      check(modes.bullets.size() == static_cast<size_t>(mode == 1 ? 2 : mode == 2 ? 24 : 10),
+      check(modes.bullets.size() == static_cast<size_t>(mode == 1 ? 2 : mode == 2 ? 24
+                                                                                  : 10),
             "shot pattern has the correct pellet count");
-      check(modes.player.shells == 3 && near(modes.player.vel.x, mode == 1 ? -27.5 : mode == 2 ? -22.5 : -25),
-        "modes use one ammo with 1.1x longshot and 0.9x scatter firing recoil");
+      check(modes.player.shells == 3 && near(modes.player.vel.x, mode == 1 ? -27.5 : mode == 2 ? -22.5
+                                                                                               : -25),
+            "modes use one ammo with 1.1x longshot and 0.9x scatter firing recoil");
       for (const auto &pellet : modes.bullets)
       {
         check(near(pellet.hitRadius, mode == 1 ? 2.5 : 0.55), "only longshot gets a much larger hit radius");
         double range = pellet.vel.length() * pellet.life;
-        check(mode == 1 ? range > 139 && range < 150 : mode == 2 ? range > 13 && range < 18 : range > 32 && range < 43,
+        check(mode == 1 ? range > 139 && range < 150 : mode == 2 ? range > 13 && range < 18
+                                                                 : range > 32 && range < 43,
               "each firing pattern has its intended range");
         if (mode == 1)
           check(std::abs(std::atan2(pellet.vel.y, pellet.vel.x)) <= 0.025, "longshot has a tight spread");
       }
-      modes.cycleShotMode();
+      modes.shotMode = static_cast<bb::ShotMode>((mode + 1) % 3);
       check(!modes.shoot(modes.player.pos + bb::Vec{10, 0}), "mode switching cannot bypass cooldown");
     }
-    check(modes.shotMode == bb::ShotMode::Normal, "shot modes wrap back to normal");
-    modes.cycleShotMode(); modes.reset(42);
+    modes.shotMode = bb::ShotMode::Scatter;
+    modes.reset(42);
     check(modes.shotMode == bb::ShotMode::Normal, "retry resets shot mode");
   }
   check(g.platforms.size() > 10, "endless world generated at startup");
@@ -308,10 +405,22 @@ int main()
     g.player.vel = {0, -2};
     g.platforms = {{10, 1, 60, false}};
     g.update(1.0 / 120);
-    check(g.player.shells == std::min(6, shells + 2), "landing adds two shells and caps bonus ammo at six");
+    check(g.player.shells == shells, "landing cannot add ammo at or above four or remove kill bonuses");
     g.pickups = {{g.player.pos, 0}};
     g.update(1.0 / 120);
-    check(g.player.shells == std::min(6, shells + 2) && g.bonus == 25, "ammo pickups preserve bonus ammo");
+    check(g.player.shells == shells && g.bonus == 25, "ammo pickups preserve bonus ammo");
+  }
+  for (int shells : {2, 3})
+  {
+    g.reset(42);
+    g.enemies.clear();
+    g.pickups.clear();
+    g.player.shells = shells;
+    g.player.pos = {40, 1 + bb::Game::radius + 0.01};
+    g.player.vel = {0, -2};
+    g.platforms = {{10, 1, 60, false}};
+    g.update(1.0 / 120);
+    check(g.player.shells == 4, "landing restores up to two shells without exceeding four");
   }
   g.reset(42);
   g.player.pos.y = -24;

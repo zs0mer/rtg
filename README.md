@@ -26,7 +26,6 @@ use a direct terminal if it intercepts clicks. This is a terminal game, not a GU
 | --- | --- |
 | Mouse | Aim the shotgun |
 | Hold left mouse button | Fire repeatedly |
-| S | Cycle normal / longshot / scatter |
 | Enter / click | Start immediately |
 | P | Pause / resume |
 | R / Enter after death | Instantly retry the same course |
@@ -58,7 +57,14 @@ shapes and HUD labels stay the same so they remain identifiable.
 
 ## Gameplay
 
-**Shotgun modes:** press **S** to cycle. The current mode appears beside the
+**Shotgun modes:** shoot the first big glowing circle at a random height between
+**750–1,000m**, centered in the
+arena, to randomly switch to either of the other two modes (equal chances).
+More circles appear as you climb, each a random **1,000–1,500m** above the last,
+whether you shoot or skip the previous circle.
+The circle recharges for 1.25 seconds between changes, preventing multiple
+pellets from rerolling a single blast. Only your shots activate it; touching it
+does nothing. There is no keyboard mode-switch control. The current mode appears beside the
 bottom HUD. Each blast costs one ammo, deals one damage per pellet, and retains
 the same firing cooldown. Longshot has **1.1×** normal recoil. Scatter fires with
 **0.9×** recoil; if its pellets kill an enemy, an extra **0.85×** recoil impulse
@@ -85,7 +91,8 @@ spawns spread across the full width.
 
 - **Four rechargeable shells, up to six with kills.** Each enemy kill instantly
   adds three shells, capped at six. Safe landings add two shells per touchdown,
-  also capped at six; standing on a platform does not repeatedly grant ammo.
+  capped at four without removing existing bonus ammo; standing on a platform
+  does not repeatedly grant ammo.
   Ammo pickups refill to four without removing bonus ammo. Passive reload restores one shell every
   0.75 seconds, only while below four. Firing cancels reload progress and starts
   the timer over. Chain kills to build an ammo reserve.

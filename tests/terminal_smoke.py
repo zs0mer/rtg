@@ -52,9 +52,11 @@ def run(binary, interrupt=False):
             until(b"CLICK TO DROP IN")
             until(b"READY  [")
             until(b"T STYLE reactor")
-            for name in (b"LONGSHOT", b"SCATTER", b"NORMAL"):
-                os.write(master, b"s")
-                until(name)
+            start = len(output)
+            os.write(master, b"sS")
+            until(b"T STYLE reactor")
+            check(b"NORMAL" in output[start:] and b"LONGSHOT" not in output[start:]
+                and b"SCATTER" not in output[start:], "S must not switch weapon modes")
             for name in ("synthwave", "acid", "glacier", "inferno", "sakura",
                          "ultraviolet", "outrun", "matrix", "prism", "reactor"):
                 os.write(master, b"t")

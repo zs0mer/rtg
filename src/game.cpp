@@ -22,6 +22,8 @@ namespace bb
     rng.seed(seed);
     player = Player{};
     shotMode = ShotMode::Normal;
+    modeTarget = {width / 2, random(750, 1000) + 3};
+    modeTargetCooldown = 0;
     player.pos.x = width / 2;
     platforms = {{width / 2 - 15, 1, 30, false}};
     enemies.clear();
@@ -44,17 +46,16 @@ namespace bb
       particles.push_back({pos, Vec{std::cos(a), std::sin(a)} * random(speed * 0.2, speed), life, life, color});
     }
   }
-  void Game::cycleShotMode()
-  {
-    shotMode = static_cast<ShotMode>((static_cast<int>(shotMode) + 1) % 3);
-  }
   const char *Game::shotModeName() const
   {
     switch (shotMode)
     {
-      case ShotMode::Longshot: return "LONGSHOT";
-      case ShotMode::Scatter: return "SCATTER";
-      default: return "NORMAL";
+    case ShotMode::Longshot:
+      return "LONGSHOT";
+    case ShotMode::Scatter:
+      return "SCATTER";
+    default:
+      return "NORMAL";
     }
   }
   bool Game::shoot(Vec target)
@@ -62,7 +63,8 @@ namespace bb
     if (dead || player.cooldown > 0 || player.shells <= 0)
       return false;
     Vec aim = (target - player.pos).unit();
-    double recoil = 25 * (shotMode == ShotMode::Longshot ? 1.1 : shotMode == ShotMode::Scatter ? 0.9 : 1.0);
+    double recoil = 25 * (shotMode == ShotMode::Longshot ? 1.1 : shotMode == ShotMode::Scatter ? 0.9
+                                                                                               : 1.0);
     player.vel += aim * -recoil;
     // Preserve momentum, but keep repeated blasts controllable.
     double speed = player.vel.length();
@@ -74,17 +76,19 @@ namespace bb
     shake = 0.23;
     flash = 0.065;
     double angle = std::atan2(aim.y, aim.x);
-    int count = shotMode == ShotMode::Longshot ? 2 : shotMode == ShotMode::Scatter ? 24 : 10;
-    double spread = shotMode == ShotMode::Longshot ? 0.025 : shotMode == ShotMode::Scatter ? 0.48 : 0.19;
-    double life = shotMode == ShotMode::Longshot ? 0.9 : shotMode == ShotMode::Scatter ? 0.14 : 0.34;
-    auto killRecoil = shotMode == ShotMode::Scatter ?
-      std::make_shared<KillRecoil>(KillRecoil{aim * (-25 * 0.85), false}) : nullptr;
+    int count = shotMode == ShotMode::Longshot ? 2 : shotMode == ShotMode::Scatter ? 24
+                                                                                   : 10;
+    double spread = shotMode == ShotMode::Longshot ? 0.025 : shotMode == ShotMode::Scatter ? 0.48
+                                                                                           : 0.19;
+    double life = shotMode == ShotMode::Longshot ? 0.9 : shotMode == ShotMode::Scatter ? 0.14
+                                                                                       : 0.34;
+    auto killRecoil = shotMode == ShotMode::Scatter ? std::make_shared<KillRecoil>(KillRecoil{aim * (-25 * 0.85), false}) : nullptr;
     for (int i = 0; i < count; ++i)
     {
       double a = angle + random(-spread, spread);
       double velocity = shotMode == ShotMode::Longshot ? random(155, 165) : random(95, 125);
-        bullets.push_back({player.pos + aim * 1.1, Vec{std::cos(a), std::sin(a)} * velocity, life, false, killRecoil,
-          shotMode == ShotMode::Longshot ? 2.5 : 0.55});
+      bullets.push_back({player.pos + aim * 1.1, Vec{std::cos(a), std::sin(a)} * velocity, life, false, killRecoil,
+                         shotMode == ShotMode::Longshot ? 2.5 : 0.55});
     }
     burst(player.pos + aim * 1.5, 10, 0, 17);
     return true;
@@ -134,6 +138,7 @@ namespace bb
       return;
     dt = std::clamp(dt, 0.0, 1.0 / 30);
     time += dt;
+    modeTargetCooldown = std::max(0.0, modeTargetCooldown - dt);
     shake = std::max(0.0, shake - dt);
     flash = std::max(0.0, flash - dt);
     player.cooldown = std::max(0.0, player.cooldown - dt);
@@ -194,7 +199,7 @@ namespace bb
           // Reward a touchdown, not every simulation tick spent on the ledge.
           if (old.y - radius > p.y + 1e-7)
           {
-            player.shells = std::min(Player::maxBonusShells, player.shells + 2);
+            player.shells = std::max(player.shells, std::min(Player::maxShells, player.shells + 2));
             player.reload = 0;
           }
         }
@@ -203,6 +208,12 @@ namespace bb
     }
     altitude = std::max(altitude, player.pos.y - 3);
     camera = std::max(camera, player.pos.y - 16);
+    // Replace a circle only after it has left the playable view, even if skipped.
+    while (modeTarget.y + modeTargetRadius < camera - 35)
+    {
+      modeTarget.y += random(1000, 1500);
+      modeTargetCooldown = 0;
+    }
     if (time > 4)
       lava += (2.3 + std::min(6.0, altitude / 150)) * dt;
     lava = std::max(lava, camera - 25);
@@ -249,6 +260,20 @@ namespace bb
       }
       else
       {
+        if (segmentDistance(modeTarget, before, b.pos) <= modeTargetRadius + b.hitRadius)
+        {
+          b.life = 0;
+          if (modeTargetCooldown == 0)
+          {
+            int offset = std::uniform_int_distribution<int>(1, 2)(rng);
+            shotMode = static_cast<ShotMode>((static_cast<int>(shotMode) + offset) % 3);
+            // Longer than any pellet lifetime: one blast can never reroll twice.
+            modeTargetCooldown = 1.25;
+            burst(modeTarget, 50, 1, 24);
+            shake = 0.3;
+          }
+          continue;
+        }
         for (auto &e : enemies)
         {
           if (e.hp <= 0 || segmentDistance(e.pos, before, b.pos) > e.radius + b.hitRadius)
@@ -264,7 +289,8 @@ namespace bb
               b.killRecoil->used = true;
               player.vel += b.killRecoil->impulse;
               double speed = player.vel.length();
-              if (speed > 57) player.vel = player.vel * (57 / speed);
+              if (speed > 57)
+                player.vel = player.vel * (57 / speed);
               shake = 0.23;
             }
             player.shells = std::min(Player::maxBonusShells, player.shells + 3);
