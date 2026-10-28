@@ -21,9 +21,10 @@ namespace bb
   {
     rng.seed(seed);
     player = Player{};
-    shotMode = ShotMode::Normal;
-    modeTarget = {width / 2, random(750, 1000) + 3};
+    shotMode = flashMode = ShotMode::Normal;
+    modeTarget = {random(modeTargetRadius + 3, width - modeTargetRadius - 3), random(750, 1000) + 3};
     modeTargetCooldown = 0;
+    modeTargetContact = false;
     player.pos.x = width / 2;
     platforms = {{width / 2 - 15, 1, 30, false}};
     enemies.clear();
@@ -38,12 +39,12 @@ namespace bb
     deathReason.clear();
     generate(160);
   }
-  void Game::burst(Vec pos, int count, int color, double speed)
+  void Game::burst(Vec pos, int count, int color, double speed, ShotMode mode)
   {
     for (int i = 0; i < count; ++i)
     {
       double a = random(0, 2 * std::numbers::pi), life = random(0.15, 0.65);
-      particles.push_back({pos, Vec{std::cos(a), std::sin(a)} * random(speed * 0.2, speed), life, life, color});
+      particles.push_back({pos, Vec{std::cos(a), std::sin(a)} * random(speed * 0.2, speed), life, life, color, mode});
     }
   }
   const char *Game::shotModeName() const
@@ -63,9 +64,14 @@ namespace bb
     if (dead || player.cooldown > 0 || player.shells <= 0)
       return false;
     Vec aim = (target - player.pos).unit();
-    double recoil = 25 * (shotMode == ShotMode::Longshot ? 1.1 : shotMode == ShotMode::Scatter ? 0.9
-                                                                                               : 1.0);
-    player.vel += aim * -recoil;
+    double recoil = 25 * (shotMode == ShotMode::Scatter ? 0.9 : 1.0);
+    Vec impulse = aim * -recoil;
+    if (shotMode == ShotMode::Longshot)
+    {
+      impulse.x *= 0.75;
+      impulse.y *= 1.1;
+    }
+    player.vel += impulse;
     // Preserve momentum, but keep repeated blasts controllable.
     double speed = player.vel.length();
     if (speed > 57)
@@ -75,6 +81,7 @@ namespace bb
     player.reload = 0;
     shake = 0.23;
     flash = 0.065;
+    flashMode = shotMode;
     double angle = std::atan2(aim.y, aim.x);
     int count = shotMode == ShotMode::Longshot ? 2 : shotMode == ShotMode::Scatter ? 24
                                                                                    : 10;
@@ -88,10 +95,22 @@ namespace bb
       double a = angle + random(-spread, spread);
       double velocity = shotMode == ShotMode::Longshot ? random(155, 165) : random(95, 125);
       bullets.push_back({player.pos + aim * 1.1, Vec{std::cos(a), std::sin(a)} * velocity, life, false, killRecoil,
-                         shotMode == ShotMode::Longshot ? 2.5 : 0.55});
+                         shotMode == ShotMode::Longshot ? 2.5 : 0.55,
+                         shotMode == ShotMode::Longshot ? 5.0 : shotMode == ShotMode::Scatter ? 0.85 : 1.0, shotMode});
     }
-    burst(player.pos + aim * 1.5, 10, 0, 17);
+    burst(player.pos + aim * 1.5, 10, 0, 17, shotMode);
     return true;
+  }
+  void Game::activateModeTarget()
+  {
+    if (modeTargetCooldown > 0)
+      return;
+    int offset = std::uniform_int_distribution<int>(1, 2)(rng);
+    shotMode = static_cast<ShotMode>((static_cast<int>(shotMode) + offset) % 3);
+
+    modeTargetCooldown = 1.25;
+    burst(modeTarget, 50, 1, 24);
+    shake = 0.3;
   }
   void Game::damage(Vec from, const char *reason)
   {
@@ -211,9 +230,14 @@ namespace bb
     // Replace a circle only after it has left the playable view, even if skipped.
     while (modeTarget.y + modeTargetRadius < camera - 35)
     {
+      modeTarget.x = random(modeTargetRadius + 3, width - modeTargetRadius - 3);
       modeTarget.y += random(1000, 1500);
       modeTargetCooldown = 0;
+      modeTargetContact = false;
     }
+    if (!modeTargetContact && segmentDistance(modeTarget, old, player.pos) <= modeTargetRadius + radius)
+      activateModeTarget();
+    modeTargetContact = (player.pos - modeTarget).length() <= modeTargetRadius + radius;
     if (time > 4)
       lava += (2.3 + std::min(6.0, altitude / 150)) * dt;
     lava = std::max(lava, camera - 25);
@@ -260,28 +284,15 @@ namespace bb
       }
       else
       {
-        if (segmentDistance(modeTarget, before, b.pos) <= modeTargetRadius + b.hitRadius)
-        {
-          b.life = 0;
-          if (modeTargetCooldown == 0)
-          {
-            int offset = std::uniform_int_distribution<int>(1, 2)(rng);
-            shotMode = static_cast<ShotMode>((static_cast<int>(shotMode) + offset) % 3);
-            // Longer than any pellet lifetime: one blast can never reroll twice.
-            modeTargetCooldown = 1.25;
-            burst(modeTarget, 50, 1, 24);
-            shake = 0.3;
-          }
-          continue;
-        }
+
         for (auto &e : enemies)
         {
           if (e.hp <= 0 || segmentDistance(e.pos, before, b.pos) > e.radius + b.hitRadius)
             continue;
-          e.hp -= 1;
+          e.hp -= b.damage;
           e.vel += b.vel * 0.08;
           b.life = 0;
-          burst(b.pos, 4, 0, 10);
+          burst(b.pos, 4, 0, 10, b.shotMode);
           if (e.hp <= 0)
           {
             if (b.killRecoil && !b.killRecoil->used)

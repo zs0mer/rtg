@@ -62,7 +62,7 @@ namespace bb
   Terminal::Terminal()
   {
     if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO))
-      throw std::runtime_error("Open BACKBLAST in an interactive terminal (not the output panel).");
+      throw std::runtime_error("Open Zapy in an interactive terminal (not the output panel).");
     if (tcgetattr(STDIN_FILENO, &original) != 0)
       throw std::runtime_error("Cannot read terminal settings");
     auto raw = original;

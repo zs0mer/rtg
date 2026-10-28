@@ -40,6 +40,12 @@ namespace bb
     double hp, radius, phase, cooldown;
     int type;
   };
+  enum class ShotMode
+  {
+    Normal,
+    Longshot,
+    Scatter
+  };
   struct KillRecoil
   {
     Vec impulse;
@@ -52,12 +58,15 @@ namespace bb
     bool hostile;
     std::shared_ptr<KillRecoil> killRecoil = nullptr;
     double hitRadius = 0.55;
+    double damage = 1;
+    ShotMode shotMode = ShotMode::Normal;
   };
   struct Particle
   {
     Vec pos, vel;
     double life, total;
     int color;
+    ShotMode shotMode = ShotMode::Normal;
   };
   struct Pickup
   {
@@ -73,21 +82,16 @@ namespace bb
     int hp = 3, shells = maxShells;
     double cooldown = 0, reload = 0, invulnerable = 0;
   };
-  enum class ShotMode
-  {
-    Normal,
-    Longshot,
-    Scatter
-  };
+
   class Game
   {
   public:
     static constexpr double width = 100, gravity = 34, radius = 0.85;
-    Vec modeTarget{}; // Displayed height is world Y minus 3; randomized on reset.
+    Vec modeTarget{}; // Displayed height is world Y minus 3; randomized on each spawn.
     static constexpr double modeTargetRadius = 6;
     double modeTargetCooldown = 0;
     Player player;
-    ShotMode shotMode = ShotMode::Normal;
+    ShotMode shotMode = ShotMode::Normal, flashMode = ShotMode::Normal;
     std::vector<Platform> platforms;
     std::vector<Enemy> enemies;
     std::vector<Bullet> bullets;
@@ -99,7 +103,7 @@ namespace bb
     bool dead = false;
     std::string deathReason;
     explicit Game(uint32_t seed = std::random_device{}());
-    void reset(uint32_t seed);
+    void reset(uint32_t seed = std::random_device{}());
     bool shoot(Vec target);
     const char *shotModeName() const;
     void update(double dt);
@@ -110,8 +114,10 @@ namespace bb
   private:
     std::mt19937 rng;
     double generated = 0;
+    bool modeTargetContact = false;
     double random(double lo, double hi);
-    void burst(Vec pos, int count, int color, double speed);
+    void activateModeTarget();
+    void burst(Vec pos, int count, int color, double speed, ShotMode mode = ShotMode::Normal);
     void damage(Vec from, const char *reason);
   };
 }

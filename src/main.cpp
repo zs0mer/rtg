@@ -21,24 +21,54 @@ namespace
     int r, g, b;
     bool operator==(const RGB &) const = default;
   };
-  constexpr RGB ink{-1, -1, -1}, gun{145, 94, 55};
+  constexpr RGB ink{-1, -1, -1}, gun{0, 0, 0}, modeIndicator{255, 255, 255};
+  constexpr double modeWarningRange = 120, warningTolerance = 1e-7;
+  constexpr std::array<const char *, 6> titleArt{{
+      R"(     / /  ______   ___    ____  __  __)",
+      R"(    / /  /___  /  /   |  / __ \/ / / /)",
+      R"(   / /___   / /  / /| | / /_/ / /_/ /)",
+      R"(  /___  /  / /__/ ___ |/ ____/\__, /)",
+      R"(     / /  /____/_/  |_/_/    /____/)",
+      R"(    /_/)",
+  }};
   struct Theme
   {
     const char *name;
-    RGB platform, ammo, danger, player, repair, brute;
+    RGB platform, ammo, danger, player, repair, brute, enemy;
   };
-  constexpr std::array<Theme, 10> themes{{{"reactor", {40, 255, 220}, {255, 215, 60}, {255, 65, 110}, {225, 255, 250}, {100, 255, 140}, {190, 85, 255}},
-                                          {"synthwave", {0, 235, 255}, {255, 80, 230}, {255, 105, 65}, {255, 230, 255}, {150, 255, 100}, {165, 100, 255}},
-                                          {"acid", {170, 255, 0}, {255, 245, 40}, {255, 55, 150}, {240, 255, 205}, {0, 255, 175}, {200, 80, 255}},
-                                          {"glacier", {70, 180, 255}, {90, 255, 245}, {255, 85, 145}, {235, 250, 255}, {135, 255, 180}, {175, 125, 255}},
-                                          {"inferno", {255, 120, 20}, {255, 225, 65}, {255, 45, 100}, {255, 245, 205}, {90, 255, 165}, {235, 65, 255}},
-                                          {"sakura", {255, 105, 210}, {100, 245, 255}, {255, 90, 65}, {255, 235, 250}, {155, 255, 150}, {180, 100, 255}},
-                                          {"ultraviolet", {170, 90, 255}, {75, 255, 230}, {255, 70, 130}, {245, 235, 255}, {165, 255, 80}, {255, 125, 235}},
-                                          {"outrun", {255, 65, 170}, {255, 185, 40}, {255, 80, 65}, {255, 240, 250}, {50, 255, 185}, {110, 130, 255}},
-                                          {"matrix", {30, 255, 100}, {195, 255, 55}, {255, 90, 110}, {220, 255, 230}, {70, 255, 225}, {190, 105, 255}},
-                                          {"prism", {65, 210, 255}, {255, 235, 70}, {255, 65, 155}, {245, 250, 255}, {90, 255, 150}, {190, 100, 255}}}};
-  RGB cyan, gold, red, white, muted, repair, brute, edge, shadow, lavaDark;
+  constexpr std::array<Theme, 10> themes{{{"reactor", {40, 255, 220}, {255, 215, 45}, {255, 65, 110}, {225, 255, 250}, {255, 30, 220}, {190, 85, 255}, {255, 65, 110}},
+                                          {"synthwave", {0, 235, 255}, {255, 200, 50}, {255, 105, 65}, {255, 230, 255}, {255, 55, 240}, {75, 235, 255}, {255, 65, 180}},
+                                          {"acid", {170, 255, 0}, {255, 230, 35}, {255, 55, 150}, {240, 255, 205}, {255, 30, 255}, {255, 140, 40}, {120, 85, 255}},
+                                          {"glacier", {70, 180, 255}, {255, 215, 60}, {255, 85, 145}, {235, 250, 255}, {255, 60, 220}, {100, 150, 255}, {80, 225, 255}},
+                                          {"inferno", {255, 120, 20}, {255, 225, 50}, {255, 45, 100}, {255, 245, 205}, {255, 40, 240}, {255, 235, 70}, {255, 130, 35}},
+                                          {"sakura", {255, 105, 210}, {255, 210, 55}, {255, 90, 65}, {255, 235, 250}, {255, 25, 255}, {100, 180, 255}, {100, 245, 155}},
+                                          {"ultraviolet", {170, 90, 255}, {255, 220, 40}, {255, 70, 130}, {245, 235, 255}, {255, 50, 215}, {255, 150, 55}, {75, 255, 210}},
+                                          {"outrun", {255, 65, 170}, {255, 190, 35}, {255, 80, 65}, {255, 240, 250}, {255, 35, 245}, {65, 255, 210}, {85, 165, 255}},
+                                          {"matrix", {30, 255, 100}, {255, 220, 45}, {255, 90, 110}, {220, 255, 230}, {255, 50, 235}, {255, 145, 50}, {165, 255, 45}},
+                                          {"prism", {65, 210, 255}, {255, 230, 55}, {255, 65, 155}, {245, 250, 255}, {255, 45, 250}, {150, 110, 255}, {255, 145, 65}}}};
+  // These channel bounds also keep gold ammo and neon-magenta health apart during fades.
+  static_assert([]
+                {
+                  for (const auto &t : themes)
+                    if (t.ammo.r != 255 || t.ammo.g < 190 || t.ammo.b > 60 ||
+                        t.repair.r != 255 || t.repair.g > 60 || t.repair.b < 215)
+                      return false;
+                  return true;
+                }(), "Every theme must keep ammo warm gold and health vivid magenta");
+  RGB cyan, gold, red, white, muted, repair, brute, enemyColor, edge, shadow, lavaDark;
   RGB dim(RGB c, double factor) { return {int(c.r * factor), int(c.g * factor), int(c.b * factor)}; }
+  RGB shotColor(bb::ShotMode mode)
+  {
+    switch (mode)
+    {
+    case bb::ShotMode::Normal:
+      return {0, 240, 255};
+    case bb::ShotMode::Longshot:
+      return {45, 80, 255};
+    default:
+      return gold;
+    }
+  }
   struct ThemePhase
   {
     size_t current, next;
@@ -47,8 +77,8 @@ namespace
   constexpr ThemePhase themePhase(size_t base, double altitude)
   {
     double height = std::max(0.0, altitude);
-    size_t stage = static_cast<size_t>(height / 500);
-    double progress = std::clamp((height - stage * 500.0 - 400) / 100, 0.0, 1.0);
+    size_t stage = static_cast<size_t>(height / 750);
+    double progress = std::clamp((height - stage * 750.0 - 550) / 200, 0.0, 1.0);
     double smooth = progress * progress * (3 - 2 * progress);
     return {(base + stage) % themes.size(), (base + stage + 1) % themes.size(), smooth};
   }
@@ -56,10 +86,14 @@ namespace
   {
     return {int(a.r + (b.r - a.r) * t), int(a.g + (b.g - a.g) * t), int(a.b + (b.b - a.b) * t)};
   }
-  static_assert(themePhase(0, 399).blend == 0);
-  static_assert(themePhase(0, 450).blend == 0.5);
-  static_assert(themePhase(0, 500).current == 1 && themePhase(0, 500).blend == 0);
-  static_assert(themePhase(9, 500).current == 0 && themePhase(0, 5000).current == 0);
+  static_assert(themePhase(0, -1).blend == 0);
+  static_assert(themePhase(0, 550).blend == 0);
+  static_assert(themePhase(0, 650).blend == 0.5);
+  static_assert(themePhase(0, 749).blend > 0.99);
+  static_assert(themePhase(0, 750).current == 1 && themePhase(0, 750).blend == 0);
+  static_assert(themePhase(0, 1300).blend == 0 && themePhase(0, 1400).blend == 0.5);
+  static_assert(themePhase(0, 1500).current == 2 && themePhase(0, 1500).blend == 0);
+  static_assert(themePhase(9, 750).current == 0 && themePhase(0, 7500).current == 0);
   static_assert(mix({0, 100, 200}, {100, 200, 0}, 0.5) == RGB{50, 150, 100});
   void applyTheme(size_t index, double altitude = 0)
   {
@@ -67,13 +101,15 @@ namespace
     const auto &a = themes[phase.current], &b = themes[phase.next];
     Theme t{a.name, mix(a.platform, b.platform, phase.blend), mix(a.ammo, b.ammo, phase.blend),
             mix(a.danger, b.danger, phase.blend), mix(a.player, b.player, phase.blend),
-            mix(a.repair, b.repair, phase.blend), mix(a.brute, b.brute, phase.blend)};
+            mix(a.repair, b.repair, phase.blend), mix(a.brute, b.brute, phase.blend),
+            mix(a.enemy, b.enemy, phase.blend)};
     cyan = t.platform;
     gold = t.ammo;
     red = t.danger;
     white = t.player;
     repair = t.repair;
     brute = t.brute;
+    enemyColor = t.enemy;
     muted = dim(t.platform, 0.48);
     edge = dim(t.platform, 0.38);
     shadow = dim(t.platform, 0.24);
@@ -163,13 +199,13 @@ namespace
         x += 4;
       }
     }
-    void hud(const bb::Game &g, int best)
+    void hud(const bb::Game &g, int best, int bestStreak = 0)
     {
       int y = h - 6;
-      text(2, y, "HP", red);
+      text(2, y, "HP", repair);
       for (int i = 0; i < 3; ++i)
       {
-        RGB color = i < g.player.hp ? red : muted;
+        RGB color = i < g.player.hp ? repair : muted;
         for (int row = 1; row <= 3; ++row)
           for (int col = 0; col < 5; ++col)
             if (row == 2 || col == 2)
@@ -178,28 +214,42 @@ namespace
       int right = w - 26;
       text(right, y, "AMMO", gold);
       text(24, y, "MODE", cyan);
-      text(24, y + 1, g.shotModeName(), gold);
+      text(24, y + 1, g.shotModeName(), shotColor(g.shotMode));
       for (int i = 0; i < bb::Player::maxBonusShells; ++i)
         for (int row = 1; row <= 3; ++row)
           for (int col = 0; col < 3; ++col)
             block(right + i * 4 + col, y + row, i < g.player.shells ? gold : muted);
       int progress = g.player.shells >= bb::Player::maxShells ? 12 : std::clamp(static_cast<int>(g.player.reload / bb::Player::reloadSeconds * 12), 0, 12);
       text(right, y + 4, (g.player.shells >= bb::Player::maxShells ? "READY  [" : "RELOAD [") + std::string(static_cast<size_t>(progress), '=') + std::string(static_cast<size_t>(12 - progress), '.') + "]", gold);
-      centered(0, "BACKBLAST", cyan);
+      centered(0, "Zapy", cyan);
       text(2, 1, "BEST " + std::to_string(best) + " m", gold);
       centered(1, "HEIGHT " + std::to_string(g.score()) + " m", white);
       text(w - 24, 1, "SECTOR " + std::to_string(g.sector()) + " / KILLS " + std::to_string(g.kills), muted);
       text(2, 2, std::string(static_cast<size_t>(w - 4), '-'), muted);
       std::string streak = std::to_string(g.combo);
-      int streakWidth = std::max(9, static_cast<int>(streak.size()) * 4 - 1);
+      std::string streakRecord = "BEST " + std::to_string(bestStreak);
+      int streakWidth = std::max({9, static_cast<int>(streak.size()) * 4 - 1, static_cast<int>(streakRecord.size())});
       int streakX = w - streakWidth - 3;
       int streakY = 4;
       for (int row = 0; row < 9; ++row)
         text(streakX - 1, streakY + row, std::string(static_cast<size_t>(streakWidth + 2), ' '));
       text(streakX, streakY, "STREAK", cyan);
+      text(streakX, streakY + 1, streakRecord, gold);
       bigNumber(streakX, streakY + 2, g.combo, g.combo > 0 ? gold : muted);
       int remaining = std::clamp(static_cast<int>(g.comboTime / 2.0 * streakWidth), 0, streakWidth);
       text(streakX, streakY + 8, std::string(static_cast<size_t>(remaining), '=') + std::string(static_cast<size_t>(streakWidth - remaining), '.'), cyan);
+    }
+    void warning(Vec pos, double radius, RGB color, int size = 1, double range = 30)
+    {
+      double top = bottom + (pixelH - 1) / scale;
+      double gap = pos.y - radius - top;
+      if (gap <= warningTolerance || gap > range + warningTolerance)
+        return;
+      auto [x, y] = point(pos);
+      (void)y;
+      for (int row = 0; row <= size; ++row)
+        for (int offset = row - size; offset <= size - row; ++offset)
+          pixel(x + offset, row, color);
     }
     void world(const bb::Game &g, Vec aim)
     {
@@ -243,16 +293,16 @@ namespace
       }
       for (const auto &e : g.enemies)
       {
-        dot(e.pos, e.radius, e.type == 2 ? brute : red);
+        dot(e.pos, e.radius, e.type == 2 ? brute : enemyColor);
         dot(e.pos + Vec{-0.4, 0.3}, 0, white);
         if (e.type == 2)
-          line(e.pos - Vec{1.5, 2.8}, e.pos + Vec{-1.5 + 3 * e.hp / bb::Enemy::bruteHp, -2.8}, red);
+          line(e.pos - Vec{1.5, 2.8}, e.pos + Vec{-1.5 + 3 * e.hp / bb::Enemy::bruteHp, -2.8}, brute);
       }
       for (const auto &b : g.bullets)
-        line(b.pos - b.vel * 0.016, b.pos, b.hostile ? red : gold);
+        line(b.pos - b.vel * 0.016, b.pos, b.hostile ? enemyColor : shotColor(b.shotMode));
       for (const auto &p : g.particles)
       {
-        RGB c = p.color == 0 ? gold : p.color == 1 ? cyan
+        RGB c = p.color == 0 ? shotColor(p.shotMode) : p.color == 1 ? cyan
                                   : p.color == 2   ? red
                                                    : repair;
         double fade = p.life / p.total;
@@ -260,33 +310,29 @@ namespace
         dot(p.pos, 0, c);
       }
       Vec dir = (aim - g.player.pos).unit();
+      RGB energy = shotColor(g.shotMode);
       for (int i = 3; i <= 10; i += 2)
-        dot(g.player.pos + dir * double(i), 0, edge);
+        dot(g.player.pos + dir * double(i), 0, dim(energy, 0.38));
       if (g.player.invulnerable <= 0 || static_cast<int>(g.time * 18) % 2 == 0)
       {
         dot(g.player.pos, 1.1, white);
         line(g.player.pos, g.player.pos + dir * 2.6, gun);
+        auto [tipX, tipY] = point(g.player.pos + dir * 2.6);
+        pixel(tipX, tipY, energy);
         if (g.flash > 0)
-          dot(g.player.pos + dir * 3.1, 0, gold);
+          dot(g.player.pos + dir * 3.1, 0, shotColor(g.flashMode));
         dot(g.player.pos + Vec{-0.25, 0.3}, 0, cyan);
       }
-      line(aim - Vec{1.2, 0}, aim + Vec{1.2, 0}, gold);
-      line(aim - Vec{0, 1.2}, aim + Vec{0, 1.2}, gold);
-      // Warn at the actual horizontal entry point, using the same world mapping.
-      // Only show nearby enemies whose entire body is still above the viewport.
+      line(aim - Vec{1.2, 0}, aim + Vec{1.2, 0}, energy);
+      line(aim - Vec{0, 1.2}, aim + Vec{0, 1.2}, energy);
+      // Use the same mapping for nearby, fully off-screen targets and enemies.
       double top = bottom + (pixelH - 1) / scale;
+      double modeGap = g.modeTarget.y - bb::Game::modeTargetRadius - top;
+      int modeSize = modeGap > modeWarningRange * 0.75 + warningTolerance ? 0 : modeGap > modeWarningRange * 0.5 + warningTolerance ? 1 : modeGap > modeWarningRange * 0.25 + warningTolerance ? 2 : 3;
+      warning(g.modeTarget, bb::Game::modeTargetRadius, g.modeTargetCooldown > 0 ? dim(modeIndicator, 0.48) : modeIndicator, modeSize, modeWarningRange);
       for (const auto &e : g.enemies)
-      {
-        double gap = e.pos.y - e.radius - top;
-        if (e.hp <= 0 || gap <= 0 || gap > 30)
-          continue;
-        auto [x, y] = point(e.pos);
-        (void)y;
-        RGB warning = e.type == 2 ? brute : red;
-        for (int offset = -1; offset <= 1; ++offset)
-          pixel(x + offset, 0, warning);
-        pixel(x, 1, warning);
-      }
+        if (e.hp > 0)
+          warning(e.pos, e.radius, e.type == 2 ? brute : enemyColor);
       for (int y = 0; y < pixelH / 2; ++y)
         for (int x = 0; x < w - 4; ++x)
         {
@@ -311,6 +357,23 @@ namespace
         text(x, y + row, std::string(box, ' '), white, ink);
       for (size_t i = 0; i < lines.size(); ++i)
         centered(y + 1 + static_cast<int>(i), lines[i], i == 0 ? cyan : white);
+    }
+    void intro()
+    {
+      std::vector<std::string> lines(titleArt.size());
+      lines.insert(lines.end(), {"Zapy // HIGH VOLTAGE. NO BRAKES.", "",
+                                 "Aim DOWN. Hold LEFT CLICK. Fly UP.",
+                                 "Side shots bounce you off the walls.",
+                                 "Kills +3 ammo. Landings +2. Brutes heal.", "",
+                                 "CLICK TO DROP IN  /  ENTER TO START"});
+      int y = std::max(3, (h - static_cast<int>(lines.size()) - 2) / 2);
+      panel(y, lines);
+      size_t titleWidth = 0;
+      for (const auto *line : titleArt)
+        titleWidth = std::max(titleWidth, std::string(line).size());
+      int x = (w - static_cast<int>(titleWidth)) / 2;
+      for (size_t i = 0; i < titleArt.size(); ++i)
+        text(x, y + 1 + static_cast<int>(i), titleArt[i], i % 2 == 0 ? shotColor(bb::ShotMode::Normal) : modeIndicator);
     }
     std::string frame() const
     {
@@ -340,18 +403,34 @@ namespace
       return out + "\033[0m";
     }
   };
-  std::filesystem::path scorePath()
+  std::filesystem::path statePath(const char *app)
   {
     if (const char *x = std::getenv("XDG_STATE_HOME"); x && *x)
-      return std::filesystem::path(x) / "backblast" / "best-height";
+      return std::filesystem::path(x) / app;
     if (const char *h = std::getenv("HOME"); h && *h)
-      return std::filesystem::path(h) / ".local/state/backblast/best-height";
+      return std::filesystem::path(h) / ".local/state" / app;
     return {};
   }
-  int loadBest()
+  std::filesystem::path scorePath()
+  {
+    auto state = statePath("zapy");
+    return state.empty() ? std::filesystem::path{} : state / "best-height";
+  }
+  std::ifstream loadState(const char *name)
+  {
+    auto state = statePath("zapy");
+    if (state.empty())
+      return {};
+    std::ifstream file(state / name);
+    // Keep existing height records and styles available after the rename.
+    if (!file.is_open())
+      file.open(statePath("backblast") / name);
+    return file;
+  }
+  int loadBest(const char *name = "best-height")
   {
     int n = 0;
-    std::ifstream f(scorePath());
+    auto f = loadState(name);
     f >> n;
     return std::max(0, n);
   }
@@ -370,7 +449,7 @@ namespace
   size_t loadTheme()
   {
     std::string name;
-    std::ifstream f(themePath());
+    auto f = loadState("theme");
     f >> name;
     try
     {
@@ -394,11 +473,12 @@ namespace
       f << themes[index].name << '\n';
     }
   }
-  void saveBest(int n)
+  void saveBest(int n, const char *name = "best-height")
   {
     auto p = scorePath();
     if (p.empty())
       return;
+    p = p.parent_path() / name;
     std::error_code ec;
     std::filesystem::create_directories(p.parent_path(), ec);
     if (ec)
@@ -425,17 +505,20 @@ int main(int argc, char **argv)
       std::string a = argv[i];
       if (a == "--help" || a == "-h")
       {
-        std::cout << "BACKBLAST - endless recoil-only terminal platformer\n\n"
+        for (const auto *line : titleArt)
+          std::cout << line << '\n';
+        std::cout << "\nZapy - endless recoil-only terminal platformer\n\n"
                   << "Aim with mouse. Hold left click to fire. Aim DOWN to fly UP.\n"
                   << "P: pause   R: restart   Q / Ctrl-C: quit   Enter: start\n"
-                  << "Shoot glowing circles to change gun mode: first at 750-1000m, then every 1000-1500m.\n"
+                  << "Touch glowing circles to change gun mode: first at 750-1000m, then every 1000-1500m.\n"
                   << "Reload 1 shell per 0.75s up to 4; kills add 3 up to 6.\n"
                   << "Safe landings add 2 ammo up to 4, preserving existing bonus ammo.\n"
                   << "Firing resets reload progress. Platforms gradually slow sideways motion.\n"
                   << "Brute kills also instantly restore 1 HP. Enemies drop no pickups.\n"
-                  << "Themes advance every 500m, fading over the preceding 100m.\n"
+                  << "Themes advance every 750m, fading over the preceding 200m.\n"
                   << "T / ]: next starting style   [: previous style (saved automatically)\n"
-                  << "Usage: backblast [--seed NUMBER] [--theme NAME] [--list-themes]\n"
+                  << "Every retry generates a new course; --seed sets only the first course.\n"
+                  << "Usage: zapy [--seed NUMBER] [--theme NAME] [--list-themes]\n"
                   << "Requires a mouse-capable UTF-8 terminal, at least 72 x 24.\n";
         return 0;
       }
@@ -466,6 +549,7 @@ int main(int argc, char **argv)
     bb::Terminal terminal;
     bb::Game game(seed);
     int best = loadBest(), savedBest = best;
+    int bestStreak = loadBest("best-streak");
     bool started = false, paused = false, held = false;
     int mx = terminal.columns / 2, my = terminal.rows - 4;
     using Clock = std::chrono::steady_clock;
@@ -512,7 +596,7 @@ int main(int argc, char **argv)
           }
           if (key == 'r' || key == 'R' || ((key == '\r' || key == '\n') && game.dead))
           {
-            game.reset(seed);
+            game.reset();
             started = true;
             paused = false;
             held = false;
@@ -540,6 +624,11 @@ int main(int argc, char **argv)
           held = false;
       }
       best = std::max(best, game.score());
+      if (game.combo > bestStreak)
+      {
+        bestStreak = game.combo;
+        saveBest(bestStreak, "best-streak");
+      }
       if (game.dead && best > savedBest)
       {
         saveBest(best);
@@ -549,7 +638,7 @@ int main(int argc, char **argv)
       Screen screen(std::max(6, terminal.columns), std::max(8, terminal.rows), game.camera);
       if (small)
       {
-        screen.text(0, 1, "BACKBLAST", cyan);
+        screen.text(0, 1, "Zapy", cyan);
         screen.text(0, 3, "Resize terminal to at least 72 x 24.");
         screen.text(0, 5, "Game frozen. Q to quit.", gold);
       }
@@ -560,21 +649,14 @@ int main(int argc, char **argv)
         if (game.shake > 0)
           screen.bottom += std::sin(game.time * 130) * game.shake * 0.8;
         screen.world(game, aim);
-        screen.hud(game, best);
+        screen.hud(game, best, bestStreak);
         auto phase = themePhase(theme, game.altitude);
         std::string style = themes[phase.current].name;
         if (phase.blend > 0)
           style += ">" + std::string(themes[phase.next].name);
         screen.text(2, terminal.rows - 1, "LMB fire  P pause  R retry  Q quit  T STYLE " + style, muted);
         if (!started)
-          screen.panel(terminal.rows / 2 - 7, {"B A C K B L A S T", "RECOIL IS YOUR ONLY WAY UP", "",
-                                               "Point DOWN. Hold LEFT CLICK. Fly UP.",
-                                               "Aim sideways to bounce off the walls.",
-                                               "Kills +3 up to 6. Landings +2 up to 4.",
-                                               "Brute kills heal 1 HP. Enemies drop no items.",
-                                               "Ammo + / repair + match your HUD colors.",
-                                               "Shoot hunters. Chain kills. Outrun the meltdown.", "",
-                                               "CLICK TO DROP IN  /  ENTER TO START"});
+          screen.intro();
         else if (game.dead)
           screen.panel(terminal.rows / 2 - 5, {"R U N  O V E R", game.deathReason, "",
                                                "HEIGHT " + std::to_string(game.score()) + " METERS",
@@ -593,7 +675,8 @@ int main(int argc, char **argv)
   }
   catch (const std::exception &e)
   {
-    std::cerr << "BACKBLAST: " << e.what() << '\n';
+    std::cerr << "Zapy: " << e.what() << '\n';
     return 1;
   }
+  return 0;
 }

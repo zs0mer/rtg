@@ -1,5 +1,5 @@
 {
-  description = "BACKBLAST — mouse-aimed recoil platformer";
+  description = "Zapy — mouse-aimed recoil platformer";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -16,7 +16,7 @@
     in
     {
       packages.${system}.default = pkgs.stdenv.mkDerivation {
-        pname = "backblast";
+        pname = "zapy";
         version = "1.0.0";
         src = ./.;
         nativeBuildInputs = with pkgs; [ cmake ];
@@ -26,8 +26,8 @@
 
       apps.${system}.default = {
         type = "app";
-        meta.description = "Endless mouse-aimed shotgun recoil terminal platformer";
-        program = "${self.packages.${system}.default}/bin/backblast";
+        meta.description = "Zapy — endless mouse-aimed shotgun recoil terminal platformer";
+        program = "${self.packages.${system}.default}/bin/zapy";
       };
 
       devShells.${system}.default = pkgs.mkShell {
@@ -40,8 +40,8 @@
         ];
 
         shellHook = ''
-          echo "BACKBLAST: cmake -S . -B build -G Ninja && cmake --build build"
-          echo "Play: ./build/backblast  |  Test: ctest --test-dir build"
+          echo "Zapy: cmake -S . -B build -G Ninja && cmake --build build"
+          echo "Play: ./build/zapy  |  Test: ctest --test-dir build"
         '';
       };
     };
