@@ -14,6 +14,10 @@ namespace bb
       double t = n > 0 ? std::clamp(((p.x - a.x) * d.x + (p.y - a.y) * d.y) / n, 0.0, 1.0) : 0;
       return (p - (a + d * t)).length();
     }
+    // Particle, ring and popup palette indices shared with the renderer.
+    constexpr int colorPlatform = 1, colorDanger = 2, colorRepair = 3, colorFireYellow = 4, colorFireRed = 5,
+                  colorAmmo = 6, colorWhite = 7;
+    bool drifts(const Enemy &e) { return e.type == Enemy::drone || e.type == Enemy::volatileDrone; }
   }
   Game::Game(uint32_t seed) : rng(seed) { reset(seed); }
   double Game::random(double lo, double hi) { return std::uniform_real_distribution<double>(lo, hi)(rng); }
@@ -31,10 +35,17 @@ namespace bb
     bullets.clear();
     particles.clear();
     pickups.clear();
+    rings.clear();
+    popups.clear();
+    banner.clear();
     camera = altitude = time = shake = flash = comboTime = scatterBoost = overspeedTime = heatShieldBelowTime = 0;
+    hitStop = deathTime = hurtFlash = topSpeed = bannerTime = 0;
     lava = -22;
-    kills = combo = bonus = 0;
+    kills = combo = bonus = bestCombo = 0;
     generated = 1;
+    // The first formation waits until the player has learned to climb.
+    nextSwarm = random(300, 380);
+    nextMilestone = 250;
     dead = false;
     debugUsed = false;
     deathReason.clear();
@@ -47,6 +58,23 @@ namespace bb
       double a = random(0, 2 * std::numbers::pi), life = random(0.15, 0.65);
       particles.push_back({pos, Vec{std::cos(a), std::sin(a)} * random(speed * 0.2, speed), life, life, color, mode});
     }
+  }
+  // Rings, popups and banners never draw from the RNG, so effects cannot change a seeded run.
+  void Game::ring(Vec pos, double radius, int color, double life)
+  {
+    if (rings.size() < 48)
+      rings.push_back({pos, radius, life, life, color});
+  }
+  void Game::popup(Vec pos, std::string text, int color, double life)
+  {
+    if (popups.size() >= 16)
+      popups.erase(popups.begin());
+    popups.push_back({pos, std::move(text), life, life, color});
+  }
+  void Game::announce(std::string text, double seconds)
+  {
+    banner = std::move(text);
+    bannerTime = seconds;
   }
   const char *Game::shotModeName() const
   {
@@ -120,6 +148,18 @@ namespace bb
     modeTargetCooldown = 1.25;
     burst(modeTarget, 50, 1, 24);
     shake = 0.3;
+    ring(modeTarget, modeTargetRadius + 5, colorWhite, 0.45);
+    announce(shotModeName());
+  }
+  void Game::die(const char *reason)
+  {
+    dead = true;
+    deathReason = reason;
+    burst(player.pos, 40, colorDanger, 28);
+    ring(player.pos, 12, colorDanger, 0.6);
+    ring(player.pos, 6, colorWhite, 0.35);
+    shake = 0.7;
+    hitStop = std::max(hitStop, 0.16);
   }
   void Game::damage(Vec from, const char *reason, bool blockedByHeatShield)
   {
@@ -128,13 +168,86 @@ namespace bb
     --player.hp;
     player.invulnerable = 1.25;
     shake = 0.4;
+    hurtFlash = 0.4;
+    hitStop = std::max(hitStop, 0.07);
     player.vel += (player.pos - from).unit() * 13;
     burst(player.pos, 22, 2, 20);
     if (player.hp <= 0)
+      die(reason);
+  }
+
+  void Game::explode(Vec at)
+  {
+    burst(at, 30, colorFireYellow, 30);
+    burst(at, 16, colorFireRed, 20);
+    ring(at, blastRadius, colorFireYellow, 0.38);
+    ring(at, blastRadius * 0.6, colorFireRed, 0.28);
+    shake = std::max(shake, 0.45);
+    hitStop = std::max(hitStop, 0.04);
+    for (auto &e : enemies)
     {
-      dead = true;
-      deathReason = reason;
+      if (e.hp <= 0 || (e.pos - at).length() > blastRadius + e.radius)
+        continue;
+      if (e.type == Enemy::volatileDrone)
+      {
+        // Neighbours cook off a beat later, so chains ripple outward instead of popping at once.
+        if (e.fuse <= 0)
+          e.fuse = 0.09;
+      }
+      else if (e.type == Enemy::brute)
+      {
+        e.hp -= blastBruteDamage;
+        e.flash = 0.12;
+        if (e.hp <= 0)
+          kill(e, KillCause::Blast);
+      }
+      else
+        kill(e, KillCause::Blast);
     }
+    for (auto &b : bullets)
+      if (b.hostile && b.life > 0 && (b.pos - at).length() < blastRadius)
+        b.life = 0;
+    // The blast never costs hull: it throws nearby players clear.
+    Vec away = player.pos - at;
+    double distance = away.length();
+    if (distance < blastRadius + radius)
+    {
+      Vec direction = distance > 0.001 ? away * (1 / distance) : Vec{0, 1};
+      direction = (direction + Vec{0, 0.5}).unit();
+      double falloff = std::clamp(distance / blastRadius, 0.0, 1.0);
+      player.vel += direction * (blastMaxImpulse + (blastMinImpulse - blastMaxImpulse) * falloff);
+    }
+  }
+  void Game::kill(Enemy &e, KillCause cause, ShotMode mode)
+  {
+    const bool brute = e.type == Enemy::brute;
+    e.hp = std::min(e.hp, 0.0);
+    player.shells = std::min(Player::maxBonusShells, player.shells + Player::killAmmo);
+    player.reload = 0;
+    if (brute)
+    {
+      double roll = random(0, 1);
+      int heal = cause == KillCause::Pellet && mode == ShotMode::Scatter && roll < 0.10 ? 2 : 1;
+      player.hp = std::min(3, player.hp + heal);
+    }
+    ++kills;
+    ++combo;
+    bestCombo = std::max(bestCombo, combo);
+    comboTime = 2;
+    bonus += 100 * std::min(combo, 8) * (brute ? 3 : 1);
+    burst(e.pos, brute ? 40 : 24, cause == KillCause::Shield ? colorFireYellow : colorDanger, 22);
+    shake = 0.18;
+    // Ordinary kills hold for a single frame; chained kills must never feel like stutter.
+    hitStop = std::max(hitStop, brute ? 0.05 : 0.012);
+    ring(e.pos, e.radius + (brute ? 5.0 : 2.5), brute ? colorRepair : colorWhite, brute ? 0.4 : 0.22);
+    if (brute)
+      popup(e.pos + Vec{0, 3}, "+HP", colorRepair, 1.1);
+
+    else if (combo >= 2)
+      popup(e.pos + Vec{0, 2}, "x" + std::to_string(combo), colorAmmo, 0.7);
+
+    if (e.type == Enemy::volatileDrone)
+      explode(e.pos);
   }
   void Game::generate(double top)
   {
@@ -153,21 +266,74 @@ namespace bb
       if (generated > 20 && random(0, 1) < spawnChance)
       {
         int type = generated > 1003 && random(0, 1) < 0.16 ? 2 : (difficulty >= 2 && random(0, 1) < 0.45 ? 1 : 0);
+        if (type == Enemy::drone && generated > 140 && random(0, 1) < 0.25)
+          type = Enemy::volatileDrone;
         double r = type == 2 ? 2.3 : 1.25;
         enemies.push_back({{random(8, width - 8), generated + 4}, {}, type == 2 ? Enemy::bruteHp : 1.0, r, random(0, 6.28), random(1, 3), type});
       }
       if (random(0, 1) < 0.3)
-        pickups.push_back({{x + w / 2, generated + 2.5}, random(0, 1) < 0.23 ? 1 : 0});
+      {
+        pickups.push_back({{x + w / 2, generated + 2.5}, random(0, 1) < 0.23 ? Pickup::repair : Pickup::ammo});
+      }
+      if (generated >= nextSwarm)
+      {
+        // A formation shares one phase so it flies in unison: a ready-made streak.
+        int count = std::uniform_int_distribution<int>(5, 7)(rng);
+        double centre = random(22, width - 22), phase = random(0, 6.28);
+        bool vee = random(0, 1) < 0.5;
+        // Later formations may carry a volatile at their heart: one shot clears the lot.
+        bool primed = generated > 500 && random(0, 1) < 0.4;
+        for (int i = 0; i < count; ++i)
+        {
+          double offset = i - (count - 1) / 2.0;
+          int type = primed && i == count / 2 ? Enemy::volatileDrone : Enemy::drone;
+          enemies.push_back({{centre + offset * 4.2, generated + 5.5 + (vee ? std::abs(offset) * 1.6 : 0)}, {}, 1.0, 1.25, phase, random(1, 3), type});
+        }
+        nextSwarm = generated + random(200, 300);
+      }
     }
+  }
+  void Game::animateEffects(double dt)
+  {
+    for (auto &p : particles)
+    {
+      p.pos += p.vel * dt;
+      p.vel.y -= 15 * dt;
+      p.life -= dt;
+    }
+    for (auto &r : rings)
+      r.life -= dt;
+    for (auto &p : popups)
+    {
+      p.pos.y += 5 * dt;
+      p.life -= dt;
+    }
+    hurtFlash = std::max(0.0, hurtFlash - dt);
+
+    bannerTime = std::max(0.0, bannerTime - dt);
+    removeIf(particles, [](const Particle &p)
+             { return p.life <= 0; });
+    removeIf(rings, [](const Ring &r)
+             { return r.life <= 0; });
+    removeIf(popups, [](const Popup &p)
+             { return p.life <= 0; });
   }
   void Game::update(double dt)
   {
-    if (dead)
-      return;
     dt = std::clamp(dt, 0.0, 1.0 / 30);
+    if (dead)
+    {
+      // The run is frozen, but the wreckage keeps flying so death reads as an event, not a hang.
+      deathTime += dt;
+      shake = std::max(0.0, shake - dt);
+      flash = std::max(0.0, flash - dt);
+      animateEffects(dt);
+      return;
+    }
     time += dt;
     modeTargetCooldown = std::max(0.0, modeTargetCooldown - dt);
     scatterBoost = std::max(0.0, scatterBoost - dt);
+
     shake = std::max(0.0, shake - dt);
     flash = std::max(0.0, flash - dt);
     player.cooldown = std::max(0.0, player.cooldown - dt);
@@ -237,11 +403,14 @@ namespace bb
             player.shells = std::max(player.shells, std::min(Player::maxShells, player.shells + 2));
             player.reload = 0;
           }
+
         }
         break;
       }
     }
     double shieldSpeed = player.vel.length();
+    topSpeed = std::max(topSpeed, shieldSpeed);
+    const bool shieldWasActive = heatShieldActive();
     if (shieldSpeed > heatShieldSpeedThreshold ||
         (heatShieldActive() && shieldSpeed >= heatShieldSpeedThreshold))
     {
@@ -264,7 +433,17 @@ namespace bb
       overspeedTime = 0;
       heatShieldBelowTime = 0;
     }
+    if (!shieldWasActive && heatShieldActive())
+    {
+      announce("HEAT SHIELD");
+      ring(player.pos, 6, colorFireYellow, 0.4);
+    }
     altitude = std::max(altitude, player.pos.y - 3);
+    while (altitude >= nextMilestone)
+    {
+      announce(std::to_string(static_cast<int>(nextMilestone)) + " m");
+      nextMilestone += 250;
+    }
     camera = std::max(camera, player.pos.y - 16);
     // Replace a circle only after it has left the playable view, even if skipped.
     while (modeTarget.y + modeTargetRadius < camera - 35)
@@ -281,11 +460,7 @@ namespace bb
       lava += (2.3 + std::min(6.0, altitude / 150)) * dt;
     lava = std::max(lava, camera - 25);
     if (player.pos.y < lava + radius)
-    {
-      dead = true;
-      deathReason = "Caught by the rising meltdown";
-      burst(player.pos, 40, 2, 28);
-    }
+      die("Caught by the rising meltdown");
     generate(camera + 150);
     for (auto &e : enemies)
     {
@@ -294,8 +469,18 @@ namespace bb
       if (e.pos.y > camera + 85 || e.pos.y < camera - 30)
         continue;
       e.phase += dt;
+      e.flash = std::max(0.0, e.flash - dt);
+      if (e.fuse > 0)
+      {
+        e.fuse -= dt;
+        if (e.fuse <= 0)
+        {
+          kill(e, KillCause::Blast);
+          continue;
+        }
+      }
       Vec delta = player.pos - e.pos;
-      if (e.type == 0)
+      if (drifts(e))
         e.vel = {std::sin(e.phase * 1.8) * 6, std::cos(e.phase * 1.3) * 2};
       else
         e.vel = delta.unit() * (e.type == 2 ? 3.5 : 7.5);
@@ -317,21 +502,16 @@ namespace bb
       }
       if (e.type != 2 && heatShieldActive() && segmentDistance(e.pos, old, player.pos) < e.radius + heatShieldRadius)
       {
-        e.hp = 0;
-        player.shells = std::min(Player::maxBonusShells, player.shells + Player::killAmmo);
-        player.reload = 0;
-        ++kills;
-        ++combo;
-        comboTime = 2;
-        bonus += 100 * std::min(combo, 8);
-        burst(e.pos, 24, 4, 22);
-        shake = 0.18;
+        kill(e, KillCause::Shield);
         continue;
       }
       if (delta.length() < e.radius + radius)
-        damage(e.pos, "Rammed by a hunter", e.type != 2);
+        damage(e.pos, e.type == Enemy::brute ? "Flattened by a brute" : e.type == Enemy::hunter ? "Rammed by a hunter"
+                                                                    : e.type == Enemy::volatileDrone ? "Flew into a volatile"
+                                                                                                     : "Rammed by a drone",
+               e.type != 2);
       e.cooldown -= dt;
-      if (e.type != 0 && e.cooldown <= 0 && delta.length() < 48)
+      if (!drifts(e) && e.cooldown <= 0 && delta.length() < 48)
       {
         Bullet projectile{e.pos, delta.unit() * (13 + std::min(12, sector())), 4, true};
         projectile.bruteShot = e.type == 2;
@@ -341,6 +521,9 @@ namespace bb
     }
     for (auto &b : bullets)
     {
+      // A blast earlier in this step may already have spent this shot.
+      if (b.life <= 0)
+        continue;
       Vec before = b.pos;
       b.pos += b.vel * dt;
       b.life -= dt;
@@ -349,7 +532,7 @@ namespace bb
         double hitRadius = heatShieldActive() && !b.bruteShot ? heatShieldRadius : radius;
         if (segmentDistance(player.pos, before, b.pos) < hitRadius + 0.4)
         {
-          damage(b.pos, "Hit by a hunter's plasma", !b.bruteShot);
+          damage(b.pos, b.bruteShot ? "Hit by a brute's plasma" : "Hit by a hunter's plasma", !b.bruteShot);
           b.life = 0;
         }
       }
@@ -375,21 +558,10 @@ namespace bb
 
               shake = 0.23;
             }
-            player.shells = std::min(Player::maxBonusShells, player.shells + Player::killAmmo);
-            player.reload = 0;
-            if (e.type == 2)
-            {
-              double roll = random(0, 1);
-              int heal = b.shotMode == ShotMode::Scatter && roll < 0.10 ? 2 : 1;
-              player.hp = std::min(3, player.hp + heal);
-            }
-            ++kills;
-            ++combo;
-            comboTime = 2;
-            bonus += 100 * std::min(combo, 8) * (e.type == 2 ? 3 : 1);
-            burst(e.pos, e.type == 2 ? 40 : 24, 2, 22);
-            shake = 0.18;
+            kill(e, KillCause::Pellet, b.shotMode);
           }
+          else
+            e.flash = 0.1;
           break;
         }
       }
@@ -408,25 +580,24 @@ namespace bb
         particles.push_back({pos, velocity, life, life, ember % 2 ? 4 : 5});
       }
     }
-    for (auto &p : particles)
-    {
-      p.pos += p.vel * dt;
-      p.vel.y -= 15 * dt;
-      p.life -= dt;
-    }
+    animateEffects(dt);
     for (auto &p : pickups)
     {
       if ((player.pos - p.pos).length() < 2.4)
       {
-        if (p.type == 1)
+        if (p.type == Pickup::repair)
+        {
           player.hp = std::min(3, player.hp + 1);
+          popup(p.pos + Vec{0, 2}, "+HP", colorRepair);
+        }
+
         else
         {
           player.shells = std::max(player.shells, Player::maxShells);
           player.reload = 0;
           bonus += 25;
         }
-        burst(p.pos, 12, p.type == 1 ? 3 : 1, 11);
+        burst(p.pos, 12, p.type == Pickup::repair ? colorRepair : colorPlatform, 11);
         p.pos.y = -1e6;
       }
     }
@@ -438,7 +609,5 @@ namespace bb
              { return p.y < camera - 35; });
     removeIf(pickups, [&](const Pickup &p)
              { return p.pos.y < camera - 35; });
-    removeIf(particles, [](const Particle &p)
-             { return p.life <= 0; });
   }
 }

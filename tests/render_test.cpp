@@ -790,6 +790,9 @@ namespace
           g.bullets.clear();
           g.pickups.clear();
           g.particles.clear();
+          // The activation shockwave is an effect too; this fixture isolates the body outline.
+          g.rings.clear();
+          g.popups.clear();
         };
         for (int i = 0; i < 359; ++i)
           chargeStep();
@@ -929,12 +932,69 @@ namespace
       }
     }
   }
+  void decorRendering()
+  {
+    applyTheme(0);
+    context = "decor";
+    constexpr int columns = 104, rows = 50;
+    auto g = emptyWorld();
+    g.camera = 100;
+    g.platforms = {{30, 110, 20, false}, {60, 120, 15, false}};
+    Screen plain(columns, rows, g.camera);
+    plain.world(g, {50, -9990});
+    Image bare = decode(plain, columns, rows);
+    Screen dressed(columns, rows, g.camera);
+    dressed.decor = true;
+    dressed.bestHeight = 112;
+    dressed.world(g, {50, -9990});
+    Image image = decode(dressed, columns, rows);
+    int added = 0;
+    for (int y = 0; y < image.height; ++y)
+      for (int x = 0; x < image.width; ++x)
+      {
+        if (!(bare.at(x, y) == ink))
+        {
+          check(image.at(x, y) == bare.at(x, y), "decoration never paints over the gameplay layer");
+          continue;
+        }
+        if (image.at(x, y) == ink)
+          continue;
+        ++added;
+        RGB c = image.at(x, y);
+        check(std::max({c.r, c.g, c.b}) <= 115, "decoration stays dim enough never to be read as gameplay");
+      }
+    check(added > 20, "decoration adds a visible starfield");
+    int line = dressed.point({50, 115}).second, dashes = 0;
+    for (int x = 0; x < image.width; ++x)
+      dashes += image.at(x, line) == dim(gold, 0.45);
+    check(dashes > 20, "the height to beat is drawn as a dashed line across the arena");
+    auto [ledgeX, ledgeY] = dressed.point({67, 120});
+    check(image.at(ledgeX, ledgeY) == cyan, "all safe ledges retain the platform colour");
+
+    g.enemies = {{{50, 115}, {}, 1, 1.25, 0, 100, bb::Enemy::volatileDrone}};
+
+    g.time = 0;
+    Image marked = render(g, columns, rows);
+    auto [bodyX, bodyY] = dressed.point({51, 115});
+    RGB body = marked.at(bodyX, bodyY);
+    check(body == fireYellow || body == fireRed, "volatiles flash in fire colours, unlike any themed enemy");
+    g.popups = {{{50, 115}, "+HP", 0.9, 0.9, 3}};
+    g.banner = "HEAT SHIELD";
+    g.bannerTime = 1;
+    Screen labelled(columns, rows, g.camera);
+    labelled.world(g, {50, -9990});
+    labelled.overlay(g);
+    const std::string text = stripAnsi(labelled.frame());
+    check(text.find("+HP") != std::string::npos && text.find("-=  HEAT SHIELD  =-") != std::string::npos,
+          "floating labels and announcements are drawn over the playfield");
+  }
 }
 
 int main()
 {
   try
   {
+    decorRendering();
     themeRendering();
     shotRendering();
     heatShieldRendering();

@@ -36,9 +36,13 @@ namespace bb
   struct Enemy
   {
     static constexpr double bruteHp = 12;
+    // Volatiles drift like drones, but detonate when destroyed.
+    static constexpr int drone = 0, hunter = 1, brute = 2, volatileDrone = 3;
     Vec pos, vel;
     double hp, radius, phase, cooldown;
     int type;
+    double flash = 0; // Seconds of hit flash remaining; cosmetic only.
+    double fuse = 0;  // Armed volatiles detonate when this runs out.
   };
   enum class ShotMode
   {
@@ -71,8 +75,30 @@ namespace bb
   };
   struct Pickup
   {
+    static constexpr int ammo = 0, repair = 1;
     Vec pos;
     int type;
+  };
+  // Expanding shockwave outline; cosmetic only.
+  struct Ring
+  {
+    Vec pos;
+    double radius, life, total;
+    int color;
+  };
+  // Short floating label in world space; cosmetic only.
+  struct Popup
+  {
+    Vec pos;
+    std::string text;
+    double life, total;
+    int color;
+  };
+  enum class KillCause
+  {
+    Pellet,
+    Shield,
+    Blast
   };
   struct Player
   {
@@ -93,6 +119,10 @@ namespace bb
     static constexpr double heatShieldChargeSeconds = 3, heatShieldSpeedThreshold = 60;
     static constexpr double heatShieldGraceSeconds = 1, heatShieldRadius = 2.5;
         static constexpr double heatShieldBruteImpulse = 80;
+
+    static constexpr double blastRadius = 11, blastBruteDamage = 6;
+    static constexpr double blastMinImpulse = 12, blastMaxImpulse = 38;
+
     Vec modeTarget{}; // Displayed height is world Y minus 3; randomized on each spawn.
     static constexpr double modeTargetRadius = 6;
     double modeTargetCooldown = 0;
@@ -103,7 +133,14 @@ namespace bb
     std::vector<Bullet> bullets;
     std::vector<Particle> particles;
     std::vector<Pickup> pickups;
+    std::vector<Ring> rings;
+    std::vector<Popup> popups;
     double camera = 0, altitude = 0, lava = -22, time = 0, shake = 0, flash = 0;
+    // hitStop is consumed by the frontend; the simulation itself never waits on it.
+    double hitStop = 0, deathTime = 0, hurtFlash = 0, topSpeed = 0;
+    double bannerTime = 0;
+    std::string banner;
+    int bestCombo = 0;
     static constexpr double scatterBoostSeconds = 1;
     double comboTime = 0, scatterBoost = 0, overspeedTime = 0, heatShieldBelowTime = 0;
     int kills = 0, combo = 0, bonus = 0;
@@ -117,6 +154,11 @@ namespace bb
     const char *shotModeName() const;
     void update(double dt);
     void generate(double top);
+    void popup(Vec pos, std::string text, int color, double life = 0.9);
+    void ring(Vec pos, double radius, int color, double life = 0.3);
+    void announce(std::string text, double seconds = 1.6);
+    // Animation clock that keeps running through the death sequence.
+    double clock() const { return time + deathTime; }
     bool heatShieldActive() const
     {
       return !dead && overspeedTime >= heatShieldChargeSeconds && heatShieldBelowTime < heatShieldGraceSeconds;
@@ -126,11 +168,16 @@ namespace bb
 
   private:
     std::mt19937 rng;
-    double generated = 0;
+    double generated = 0, nextSwarm = 0, nextMilestone = 250;
     bool modeTargetContact = false;
     double random(double lo, double hi);
     void activateModeTarget();
     void burst(Vec pos, int count, int color, double speed, ShotMode mode = ShotMode::Normal);
     void damage(Vec from, const char *reason, bool blockedByHeatShield = false);
+    void die(const char *reason);
+    void kill(Enemy &e, KillCause cause, ShotMode mode = ShotMode::Normal);
+
+    void explode(Vec at);
+    void animateEffects(double dt);
   };
 }

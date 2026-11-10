@@ -133,6 +133,28 @@ the mode to normal.
 down to cross gaps, sideways to ricochet off walls, and up to brake an ascent or
 dive onto a platform. There are deliberately no movement keys or jump button.
 
+### Tricks of the climb
+
+These enemies add new opportunities to a recoil-only run, without new controls.
+
+- **Volatiles.** Enemies flashing yellow and red drift like drones but explode
+  when destroyed by any means. The blast (radius **11**) kills regular enemies,
+  deals **6** to brutes, erases hostile shots, and sets off other volatiles a beat
+  later, so chains ripple outward. It never costs hull: within range it throws
+  you up and away, harder the closer you are. Volatiles appear above 140m.
+- **Formations.** From roughly 300m, wings of **5–7 drones** fly in unison every
+  200–300m. Above 500m some carry a volatile at their heart: one shot clears the
+  wing.
+  Feedback: kills, hull loss and blasts hold the frame for an instant; shockwave
+  rings, floating labels (`x3`, `+HP`) and centred announcements (`HEAT SHIELD`,
+  every 250m) mark events; the arena border flashes red on damage. A dim parallax
+  starfield gives a sense of speed and smears into streaks on a fast climb; it is
+  drawn in foreground glyphs only, so the terminal background and its transparency
+  are untouched. A dashed gold line marks the **height to beat** (your record when
+  the run began). `!! MELTDOWN RISING !!` blinks when the meltdown is within 12
+  units. On death the wreckage keeps flying, then the results show height, kills,
+  best streak and top speed, titled `N E W  R E C O R D` when you beat the line.
+
 Wall bounces retain 78% of sideways speed, with a minimum 12-unit sideways
 rebound so slow wall hits push you farther out. Upward velocity is multiplied by
 0.75 on contact; falling speed is unaffected.
@@ -206,8 +228,9 @@ the run until the terminal is large enough again.
 
 CMake tests cover recoil direction, cooldowns, airborne reloads, safe landings,
 one-way platforms, wall bounce, combat, invulnerability, death, seeded generation,
-world culling, and fragmented mouse input. `nix build .` builds a package and
-runs the same checks.
+world culling, fragmented mouse input, volatile chains, the death sequence,
+and the decorative render layer. `nix build .` builds a package and runs the same
+checks.
 
 For a real pseudo-terminal integration check, run
 **`python3 tests/terminal_smoke.py build/zapy`** inside **`nix develop`**.

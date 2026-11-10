@@ -58,6 +58,33 @@ namespace
                 }(), "Every theme must keep ammo warm gold and health vivid magenta");
   RGB cyan, gold, red, white, muted, repair, brute, enemyColor, edge, shadow, lavaDark;
   RGB dim(RGB c, double factor) { return {int(c.r * factor), int(c.g * factor), int(c.b * factor)}; }
+  // Palette indices used by the simulation for particles, rings and popups.
+  RGB effectColor(int index)
+  {
+    switch (index)
+    {
+    case 1:
+      return cyan;
+    case 2:
+      return red;
+    case 4:
+      return fireYellow;
+    case 5:
+      return fireRed;
+    case 6:
+      return gold;
+    case 7:
+      return white;
+    default:
+      return repair;
+    }
+  }
+  constexpr uint32_t starHash(uint32_t x, uint32_t y)
+  {
+    uint32_t h = x * 374761393u + y * 668265263u;
+    h = (h ^ (h >> 13)) * 1274126177u;
+    return h ^ (h >> 16);
+  }
   RGB shotColor(bb::ShotMode mode)
   {
     switch (mode)
@@ -129,6 +156,10 @@ namespace
 
   public:
     double bottom, scale;
+    // Purely decorative layers (starfield, speed streaks, afterimages, record line). Off by
+    // default so the gameplay layer can be rendered and verified on its own.
+    bool decor = false;
+    int bestHeight = 0;
     Screen(int columns, int rows, double camera) : w(columns), h(rows), pixelH(std::max(2, (rows - 10) * 2)),
                                                    pixels(static_cast<size_t>(std::max(1, columns - 4) * pixelH), ink), cells(static_cast<size_t>(columns * rows)),
                                                    bottom(camera - 8), scale(std::min((columns - 4) / bb::Game::width, pixelH / 52.0)) {}
@@ -160,6 +191,48 @@ namespace
       {
         double t = steps ? double(i) / steps : 0;
         pixel(static_cast<int>(x + (xx - x) * t), static_cast<int>(y + (yy - y) * t), c);
+      }
+    }
+    void circle(Vec center, double radius, RGB c)
+    {
+      int steps = std::clamp(static_cast<int>(radius * scale * 7), 12, 400);
+      for (int i = 0; i < steps; ++i)
+      {
+        double a = i * 6.283185307179586 / steps;
+        auto [x, y] = point(center + Vec{std::cos(a), std::sin(a)} * radius);
+        pixel(x, y, c);
+      }
+    }
+    void backdrop(const bb::Game &g)
+    {
+      // Only a fast climb drags the camera, so only then do the stars smear into streaks.
+      const int smear = g.dead ? 0 : std::clamp(static_cast<int>((g.player.vel.y - 38) / 7), 0, 4);
+      for (int layer = 0; layer < 2; ++layer)
+      {
+        const int scroll = static_cast<int>(std::floor(bottom * scale * (layer ? 0.55 : 0.25)));
+        const uint32_t rarity = layer ? 330 : 150;
+        const RGB color = dim(cyan, layer ? 0.34 : 0.2);
+        for (int y = 0; y < pixelH; ++y)
+          for (int x = 0; x < w - 4; ++x)
+          {
+            RGB &at = pixels[static_cast<size_t>(y * (w - 4) + x)];
+            if (!(at == ink))
+              continue;
+            for (int k = 0; k <= smear; ++k)
+              if (starHash(static_cast<uint32_t>(x + layer * 7919), static_cast<uint32_t>(y + k - scroll)) % rarity == 0)
+              {
+                at = dim(color, 1.0 - k / (smear + 1.5));
+                break;
+              }
+          }
+      }
+      if (bestHeight > 0)
+      {
+        auto [x0, y] = point({0, bestHeight + 3.0});
+        int x1 = point({bb::Game::width, 0}).first;
+        for (int x = x0 + 1; x < x1; ++x)
+          if (x % 4 < 2)
+            pixel(x, y, dim(gold, 0.45));
       }
     }
     void text(int x, int y, const std::string &s, RGB fg = white, RGB bg = ink)
@@ -281,6 +354,8 @@ namespace
             c = (x + static_cast<int>(wy * 3 + g.time * 12)) % 7 < 3 ? red : lavaDark;
           pixel(x, y, c);
         }
+      if (decor)
+        backdrop(g);
       line({0, bottom}, {0, bottom + pixelH / scale}, edge);
       line({bb::Game::width, bottom}, {bb::Game::width, bottom + pixelH / scale}, edge);
       for (const auto &p : g.platforms)
@@ -305,15 +380,21 @@ namespace
       }
       for (const auto &p : g.pickups)
       {
-        RGB c = p.type ? repair : gold;
+        RGB c = p.type == bb::Pickup::repair ? repair : gold;
         Vec pos = p.pos + Vec{0, std::sin(g.time * 5 + p.pos.x) * 0.35};
+
         line(pos - Vec{1, 0}, pos + Vec{1, 0}, c);
         line(pos - Vec{0, 1}, pos + Vec{0, 1}, c);
       }
       for (const auto &e : g.enemies)
       {
-        dot(e.pos, e.radius, e.type == 2 ? brute : enemyColor);
-        dot(e.pos + Vec{-0.4, 0.3}, 0, white);
+        RGB body = e.type == 2 ? brute : enemyColor;
+        if (e.type == bb::Enemy::volatileDrone)
+          body = e.fuse > 0 ? white : static_cast<int>(g.clock() * 6 + e.phase) % 2 ? fireYellow : fireRed;
+        if (e.flash > 0)
+          body = white;
+        dot(e.pos, e.radius, body);
+        dot(e.pos + Vec{-0.4, 0.3}, 0, e.type == bb::Enemy::volatileDrone || e.flash > 0 ? gun : white);
         if (e.type == 2)
           line(e.pos - Vec{1.5, 2.8}, e.pos + Vec{-1.5 + 3 * e.hp / bb::Enemy::bruteHp, -2.8}, brute);
       }
@@ -321,20 +402,24 @@ namespace
         line(b.pos - b.vel * 0.016, b.pos, b.hostile ? enemyColor : shotColor(b.shotMode));
       for (const auto &p : g.particles)
       {
-        RGB c = p.color == 0 ? shotColor(p.shotMode) : p.color == 1 ? cyan
-                                  : p.color == 2   ? red
-                                  : p.color == 4   ? fireYellow
-                                  : p.color == 5   ? fireRed
-                                                   : repair;
+        RGB c = p.color == 0 ? shotColor(p.shotMode) : effectColor(p.color);
         double fade = p.life / p.total;
         c = {int(c.r * fade), int(c.g * fade), int(c.b * fade)};
         dot(p.pos, 0, c);
       }
+      for (const auto &r : g.rings)
+      {
+        // Ease out: the shockwave snaps open, then lingers as it fades.
+        double age = 1 - r.life / r.total;
+        circle(r.pos, r.radius * (1 - (1 - age) * (1 - age)), dim(effectColor(r.color), 1 - age * 0.75));
+      }
       Vec dir = (aim - g.player.pos).unit();
       RGB energy = shotColor(g.shotMode);
-      for (int i = 3; i <= 10; i += 2)
-        dot(g.player.pos + dir * double(i), 0, dim(energy, 0.38));
-      if (g.player.invulnerable <= 0 || static_cast<int>(g.time * 18) % 2 == 0)
+      if (!g.dead)
+        for (int i = 3; i <= 10; i += 2)
+          dot(g.player.pos + dir * double(i), 0, dim(energy, 0.38));
+
+      if (!g.dead && (g.player.invulnerable <= 0 || static_cast<int>(g.time * 18) % 2 == 0))
       {
         dot(g.player.pos, 1.1, white);
         line(g.player.pos, g.player.pos + dir * 2.6, gun);
@@ -382,11 +467,30 @@ namespace
           else
             cells[at] = {top, bottomPixel, "▀"};
         }
+      // The frame flinches when hull is lost.
+      RGB border = g.hurtFlash > 0 ? red : muted;
       for (int y = 3; y < h - 7; ++y)
       {
-        text(1, y, "|", muted);
-        text(w - 2, y, "|", muted);
+        text(1, y, "|", border);
+        text(w - 2, y, "|", border);
       }
+    }
+    // Text drawn over the playfield: floating labels, announcements and the meltdown alarm.
+    void overlay(const bb::Game &g)
+    {
+      for (const auto &p : g.popups)
+      {
+        auto [px, py] = point(p.pos);
+        int row = py / 2 + 3, col = px + 2 - static_cast<int>(p.text.size()) / 2;
+        if (py < 0 || row < 3 || row >= h - 7)
+          continue;
+        col = std::clamp(col, 2, std::max(2, w - 2 - static_cast<int>(p.text.size())));
+        text(col, row, p.text, dim(effectColor(p.color), 0.45 + 0.55 * p.life / p.total));
+      }
+      if (g.bannerTime > 0 && !g.banner.empty())
+        centered(5, "-=  " + g.banner + "  =-", g.bannerTime > 0.3 || static_cast<int>(g.clock() * 20) % 2 ? white : muted);
+      if (!g.dead && g.time > 4 && g.player.pos.y - g.lava < 12 && static_cast<int>(g.time * 6) % 2 == 0)
+        centered(h - 8, "!! MELTDOWN RISING !!", red);
     }
     void panel(int y, const std::vector<std::string> &lines)
     {
@@ -602,6 +706,7 @@ int main(int argc, char **argv)
                   << "Safe landings add 2 ammo up to 4, preserving existing bonus ammo.\n"
                   << "Firing resets reload progress. Platforms gradually slow sideways motion.\n"
                   << "Brute kills always heal 1 HP; Scatter has a 10% chance to heal 2 HP.\n"
+                  << "Flashing volatiles explode: the blast kills neighbours and throws you clear.\n"
                   << "Themes advance every 750m, fading over the preceding 200m.\n"
                   << "T / ]: next starting style   [: previous style (saved automatically)\n"
                   << "Every retry generates a new course; --seed sets only the first course.\n"
@@ -637,6 +742,8 @@ int main(int argc, char **argv)
     bb::Game game(seed);
     RunRecords records;
     bool started = false, paused = false, held = false;
+    // The record to beat is fixed when a run begins, so the line in the world stays put.
+    int recordToBeat = records.best;
     int mx = terminal.columns / 2, my = terminal.rows - 4;
     using Clock = std::chrono::steady_clock;
     auto last = Clock::now();
@@ -690,6 +797,7 @@ int main(int argc, char **argv)
             records.finish();
             game.reset();
             records.beginRun();
+            recordToBeat = records.best;
             started = true;
             paused = false;
             held = false;
@@ -701,13 +809,22 @@ int main(int argc, char **argv)
       }
       if (started && !paused && !small && !game.dead)
       {
-        accumulator += std::min(elapsed, 0.1);
-        while (accumulator >= step && !game.dead)
+        if (game.hitStop > 0)
         {
-          if (held)
-            game.shoot(mapping.mouse(mx, my));
-          game.update(step);
-          accumulator -= step;
+          // Freeze-frame on impact. Capped so chained hits can never stall the run.
+          game.hitStop = std::min(game.hitStop, 0.16) - elapsed;
+          accumulator = 0;
+        }
+        else
+        {
+          accumulator += std::min(elapsed, 0.1);
+          while (accumulator >= step && !game.dead && game.hitStop <= 0)
+          {
+            if (held)
+              game.shoot(mapping.mouse(mx, my));
+            game.update(step);
+            accumulator -= step;
+          }
         }
       }
       else
@@ -715,6 +832,9 @@ int main(int argc, char **argv)
         accumulator = 0;
         if (small || game.dead)
           held = false;
+        // Keep the wreckage flying behind the results panel.
+        if (game.dead && !paused && !small)
+          game.update(std::min(elapsed, 1.0 / 30));
       }
       records.update(game);
       applyTheme(theme, game.altitude);
@@ -730,9 +850,13 @@ int main(int argc, char **argv)
         Vec aim = mapping.mouse(mx, my);
         // Small, short-lived camera kick, never applied to physics or mouse aiming.
         if (game.shake > 0)
-          screen.bottom += std::sin(game.time * 130) * game.shake * 0.8;
+          screen.bottom += std::sin(game.clock() * 130) * game.shake * 0.8;
+        screen.decor = true;
+        screen.bestHeight = recordToBeat;
         screen.world(game, aim);
         screen.hud(game, records.best, records.bestStreak);
+        if (started)
+          screen.overlay(game);
         auto phase = themePhase(theme, game.altitude);
         std::string style = themes[phase.current].name;
         if (phase.blend > 0)
@@ -741,10 +865,16 @@ int main(int argc, char **argv)
         if (!started)
           screen.intro();
         else if (game.dead)
-          screen.panel(terminal.rows / 2 - 5, {"R U N  O V E R", game.deathReason, "",
-                                               "HEIGHT " + std::to_string(game.score()) + " METERS",
-                                               std::to_string(game.kills) + " HUNTERS DOWN  /  BEST " + std::to_string(records.best) + " m", "",
-                                               "R / ENTER: instant retry    Q: leave"});
+        {
+          // Let the explosion land before the results cover it.
+          if (game.deathTime > 0.45)
+            screen.panel(terminal.rows / 2 - 6, {!game.debugUsed && game.score() > recordToBeat ? "N E W  R E C O R D" : "R U N  O V E R", game.deathReason, "",
+                                                 "HEIGHT " + std::to_string(game.score()) + " METERS",
+                                                 std::to_string(game.kills) + " HUNTERS DOWN  /  BEST " + std::to_string(records.best) + " m",
+                                                 "STREAK " + std::to_string(game.bestCombo) + " / TOP SPEED " + std::to_string(static_cast<int>(game.topSpeed)),
+                                                 "",
+                                                 "R / ENTER: instant retry    Q: leave"});
+        }
         else if (paused)
           screen.panel(terminal.rows / 2 - 2, {"P A U S E D", "P: resume   R: retry   Q: quit"});
         else if (game.time < 5)

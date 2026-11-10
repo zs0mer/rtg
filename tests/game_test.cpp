@@ -1690,5 +1690,116 @@ int main()
   check(events.size() == 2 && !events[0].down && !events[1].down, "motion and wheel do not fire");
   events = parser.feed("\033[Apq");
   check(events.size() == 2 && events[0].key == 'p' && events[1].key == 'q', "unmapped arrow keys ignored");
+  {
+    bb::Game contact(42);
+    isolateCombat(contact);
+    contact.player.vel = {0, -20};
+    contact.enemies = {{{50, 28}, {}, 1, 1.25, 0, 100, 0}};
+    contact.update(1.0 / 120);
+    check(contact.player.hp == 2 && contact.kills == 0 && contact.enemies.size() == 1,
+          "falling onto an enemy from above causes contact damage, not a kill");
+    bb::Game brute(42);
+    isolateCombat(brute);
+    brute.player.vel = {0, -20};
+    brute.player.shells = 1;
+    brute.enemies = {{{50, 27}, {}, bb::Enemy::bruteHp, 2.3, 0, 100, 2}};
+    brute.update(1.0 / 120);
+    check(brute.player.hp == 2 && brute.player.shells == 1 &&
+              near(brute.enemies.front().hp, bb::Enemy::bruteHp),
+          "falling onto a brute does not damage it or replenish shells");
+  }
+  {
+    bb::Game blast(42);
+    isolateCombat(blast);
+    blast.enemies = {{{30, 20}, {}, 1, 1.25, 0, 100, 3},
+                     {{36, 20}, {}, 1, 1.25, 0, 100, 0},
+                     {{24, 20}, {}, 1, 1.25, 0, 100, 3},
+                     {{30, 27}, {}, bb::Enemy::bruteHp, 2.3, 0, 100, 2},
+                     {{43.5, 20}, {}, 1, 1.25, 0, 100, 0}};
+    blast.bullets = {{{30, 20}, {}, 0.3, false}, {{32, 22}, {}, 1, true}};
+    blast.update(0);
+    check(blast.kills == 2 && blast.enemies.size() == 3 && blast.bullets.empty(),
+          "a volatile's blast kills the regular enemy beside it and wipes hostile fire in range");
+    check(blast.enemies[0].type == 3 && blast.enemies[0].fuse > 0 &&
+              near(blast.enemies[1].hp, bb::Enemy::bruteHp - bb::Game::blastBruteDamage) && blast.enemies[2].type == 0,
+          "the blast arms neighbouring volatiles, wounds brutes, and spares enemies outside its radius");
+    check(blast.player.hp == 3 && near(blast.player.vel.x, 0) && near(blast.player.vel.y, 0),
+          "a distant blast neither hurts nor moves the player");
+    advance(blast, 0.15);
+    check(blast.kills == 4 && blast.combo == 4 && blast.enemies.size() == 1 &&
+              blast.enemies.front().type == 0,
+          "an armed volatile detonates a beat later, chaining through the wounded brute");
+    bb::Game thrown(42);
+    isolateCombat(thrown);
+    thrown.enemies = {{{50, 26}, {}, 1, 1.25, 0, 100, 3}};
+    thrown.bullets = {{{50, 26}, {}, 0.3, false}};
+    thrown.update(0);
+    check(thrown.player.hp == 3 && near(thrown.player.vel.x, 0) &&
+              near(thrown.player.vel.y, bb::Game::blastMaxImpulse +
+                                            (bb::Game::blastMinImpulse - bb::Game::blastMaxImpulse) * 4 / bb::Game::blastRadius),
+          "a nearby blast throws the player clear, harder the closer it is, and never costs hull");
+  }
+  {
+    bb::Game streak(42);
+    isolateCombat(streak);
+    streak.combo = 4;
+    streak.comboTime = 1;
+    streak.player.shells = 0;
+    bb::Bullet plasma{{20, 50}, {}, 1, true};
+    plasma.bruteShot = true;
+    streak.bullets = {plasma, {{40, 20}, {}, 0.3, false}};
+    streak.enemies = {{{40, 20}, {}, 1, 1.25, 0, 100, 0}};
+    streak.update(0);
+    check(streak.combo == 5 && streak.bestCombo == 5 && streak.player.shells == bb::Player::killAmmo &&
+              streak.bullets.size() == 1 && streak.bullets.front().hostile && streak.bullets.front().bruteShot,
+          "the fifth kill awards only the normal ammo and leaves hostile shots in flight");
+    check(streak.shoot({50, 20}) && streak.player.shells == bb::Player::killAmmo - 1,
+          "shots consume ammo even during a kill streak");
+    streak.reset(42);
+    check(streak.bestCombo == 0 && streak.rings.empty() && streak.popups.empty() && streak.banner.empty(),
+          "retry clears run statistics and lingering effects");
+  }
+  {
+    bb::Game wreck(42);
+    isolateCombat(wreck);
+    wreck.lava = 40;
+    wreck.update(1.0 / 120);
+    check(wreck.dead && wreck.particles.size() >= 40 && !wreck.rings.empty(), "death throws wreckage and a shockwave");
+    const double frozen = wreck.time;
+    const bb::Vec where = wreck.player.pos;
+    advance(wreck, 1.0);
+    check(wreck.particles.empty() && wreck.rings.empty() && near(wreck.deathTime, 1.0) && near(wreck.time, frozen) &&
+              near(wreck.player.pos.x, where.x) && near(wreck.player.pos.y, where.y),
+          "after death only the effects animate: the run clock and the player stay frozen");
+  }
+  {
+    bool volatiles = false, formations = false;
+    for (unsigned seed = 0; seed < 40; ++seed)
+    {
+      bb::Game world(seed);
+      world.generate(2000);
+      for (const auto &p : world.pickups)
+        check(p.type == bb::Pickup::repair || p.type == bb::Pickup::ammo,
+              "courses only contain repair and ammo pickups");
+      for (const auto &e : world.enemies)
+      {
+        if (e.type == bb::Enemy::volatileDrone)
+        {
+          volatiles = true;
+          check(e.pos.y > 140, "volatiles are held back from the opening stretch");
+        }
+        // Only a formation shares one phase between its members.
+        auto wing = std::count_if(world.enemies.begin(), world.enemies.end(), [&](const auto &other)
+                                  { return other.phase == e.phase; });
+        if (wing >= 5)
+        {
+          formations = true;
+          check(wing <= 7 && e.pos.y > 300 && e.type != bb::Enemy::brute && e.type != bb::Enemy::hunter,
+                "formations are five to seven drifting enemies and never appear in the first 300m");
+        }
+      }
+    }
+    check(volatiles && formations, "courses contain volatiles and formations");
+  }
   std::cout << "PASS: " << checks << " physics, generation, combat, and input checks\n";
 }
