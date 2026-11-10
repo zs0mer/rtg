@@ -22,6 +22,7 @@ namespace
     bool operator==(const RGB &) const = default;
   };
   constexpr RGB ink{-1, -1, -1}, gun{0, 0, 0}, modeIndicator{255, 255, 255};
+    constexpr RGB fireYellow{255, 220, 35}, fireRed{255, 55, 20};
   constexpr double modeWarningRange = 120, warningTolerance = 1e-7;
   constexpr std::array<const char *, 6> titleArt{{
       R"(     / /  ______   ___    ____  __  __)",
@@ -222,6 +223,8 @@ namespace
       int progress = g.player.shells >= bb::Player::maxShells ? 12 : std::clamp(static_cast<int>(g.player.reload / bb::Player::reloadSeconds * 12), 0, 12);
       text(right, y + 4, (g.player.shells >= bb::Player::maxShells ? "READY  [" : "RELOAD [") + std::string(static_cast<size_t>(progress), '=') + std::string(static_cast<size_t>(12 - progress), '.') + "]", gold);
       centered(0, "Zapy", cyan);
+      if (g.debugUsed)
+        text(2, 0, "UNRANKED", muted);
       text(2, 1, "BEST " + std::to_string(best) + " m", gold);
       centered(1, "HEIGHT " + std::to_string(g.score()) + " m", white);
       text(w - 24, 1, "SECTOR " + std::to_string(g.sector()) + " / KILLS " + std::to_string(g.kills), muted);
@@ -238,6 +241,22 @@ namespace
       bigNumber(streakX, streakY + 2, g.combo, g.combo > 0 ? gold : muted);
       int remaining = std::clamp(static_cast<int>(g.comboTime / 2.0 * streakWidth), 0, streakWidth);
       text(streakX, streakY + 8, std::string(static_cast<size_t>(remaining), '=') + std::string(static_cast<size_t>(streakWidth - remaining), '.'), cyan);
+
+      double speed = g.player.vel.length();
+      int speedValue = static_cast<int>(std::lround(speed));
+      int speedWidth = std::max(11, static_cast<int>(std::to_string(speedValue).size()) * 4 - 1);
+      bool overcap = speed > bb::Game::softSpeedThreshold;
+      RGB speedColor = overcap ? fireRed : cyan;
+      for (int row = 0; row < 9; ++row)
+        text(2, 4 + row, std::string(static_cast<size_t>(speedWidth + 2), ' '));
+      text(3, 4, "VELOCITY", cyan);
+      text(3, 5, "SOFT " + std::to_string(static_cast<int>(bb::Game::softSpeedThreshold)), fireYellow);
+      bigNumber(3, 6, speedValue, speed > 0 ? speedColor : muted);
+      text(3, 11, overcap ? "OVERCAP" : "u/s", speedColor);
+      int filled = std::clamp(static_cast<int>(speed / bb::Game::softSpeedThreshold * (speedWidth - 2)), 0, speedWidth - 2);
+      text(3, 12, std::string(static_cast<size_t>(filled), '=') + std::string(static_cast<size_t>(speedWidth - 2 - filled), '.'), speedColor);
+      text(3 + speedWidth - 2, 12, "|", fireYellow);
+      text(3 + speedWidth - 1, 12, overcap ? "!" : ".", overcap ? fireRed : muted);
     }
     void warning(Vec pos, double radius, RGB color, int size = 1, double range = 30)
     {
@@ -304,6 +323,8 @@ namespace
       {
         RGB c = p.color == 0 ? shotColor(p.shotMode) : p.color == 1 ? cyan
                                   : p.color == 2   ? red
+                                  : p.color == 4   ? fireYellow
+                                  : p.color == 5   ? fireRed
                                                    : repair;
         double fade = p.life / p.total;
         c = {int(c.r * fade), int(c.g * fade), int(c.b * fade)};
@@ -322,6 +343,23 @@ namespace
         if (g.flash > 0)
           dot(g.player.pos + dir * 3.1, 0, shotColor(g.flashMode));
         dot(g.player.pos + Vec{-0.25, 0.3}, 0, cyan);
+      }
+      if (g.heatShieldActive())
+      {
+        auto [bodyX, bodyY] = point(g.player.pos);
+        int radius = static_cast<int>(1.1 * scale) + 1;
+        int phase = static_cast<int>(g.time * 10);
+        int top = bodyY - radius;
+        int cycle = radius * 2 + 2;
+        for (int x = -radius; x <= radius; ++x)
+          pixel(bodyX + x, top, (x + phase) % 2 ? fireRed : fireYellow);
+        // One-pixel-wide streams spill from the top and drip down opposite sides.
+        for (int side : {-1, 1})
+        {
+          int drop = 1 + (phase + (side > 0 ? cycle / 2 : 0)) % cycle;
+          pixel(bodyX + side * radius, top + drop - 1, fireRed);
+          pixel(bodyX + side * radius, top + drop, fireYellow);
+        }
       }
       line(aim - Vec{1.2, 0}, aim + Vec{1.2, 0}, energy);
       line(aim - Vec{0, 1.2}, aim + Vec{0, 1.2}, energy);
@@ -364,7 +402,7 @@ namespace
       lines.insert(lines.end(), {"Zapy // HIGH VOLTAGE. NO BRAKES.", "",
                                  "Aim DOWN. Hold LEFT CLICK. Fly UP.",
                                  "Side shots bounce you off the walls.",
-                                 "Kills +3 ammo. Landings +2. Brutes heal.", "",
+                                 "Kills +3 ammo. Landings +2. Brutes always heal.", "",
                                  "CLICK TO DROP IN  /  ENTER TO START"});
       int y = std::max(3, (h - static_cast<int>(lines.size()) - 2) / 2);
       panel(y, lines);
@@ -492,6 +530,55 @@ namespace
     }
     std::filesystem::rename(temp, p, ec);
   }
+  class RunRecords
+  {
+  public:
+    int best = loadBest(), bestStreak = loadBest("best-streak");
+    void beginRun()
+    {
+      runBest = best;
+      runBestStreak = bestStreak;
+      disqualified = false;
+    }
+    void update(const bb::Game &game)
+    {
+      if (game.debugUsed)
+      {
+        if (!disqualified)
+        {
+          best = runBest;
+          // Withdraw streak records already saved earlier in this now-unranked run.
+          if (bestStreak > runBestStreak)
+            saveBest(runBestStreak, "best-streak");
+          bestStreak = runBestStreak;
+          disqualified = true;
+        }
+        return;
+      }
+      if (disqualified)
+        return;
+      best = std::max(best, game.score());
+      if (game.combo > bestStreak)
+      {
+        bestStreak = game.combo;
+        saveBest(bestStreak, "best-streak");
+      }
+      if (game.dead)
+        finish();
+    }
+    void finish()
+    {
+      if (best > savedBest)
+      {
+        saveBest(best);
+        savedBest = best;
+      }
+    }
+
+  private:
+    int savedBest = best, runBest = best, runBestStreak = bestStreak;
+    bool disqualified = false;
+  };
 }
 
 int main(int argc, char **argv)
@@ -514,7 +601,7 @@ int main(int argc, char **argv)
                   << "Reload 1 shell per 0.75s up to 4; kills add 3 up to 6.\n"
                   << "Safe landings add 2 ammo up to 4, preserving existing bonus ammo.\n"
                   << "Firing resets reload progress. Platforms gradually slow sideways motion.\n"
-                  << "Brute kills also instantly restore 1 HP. Enemies drop no pickups.\n"
+                  << "Brute kills always heal 1 HP; Scatter has a 10% chance to heal 2 HP.\n"
                   << "Themes advance every 750m, fading over the preceding 200m.\n"
                   << "T / ]: next starting style   [: previous style (saved automatically)\n"
                   << "Every retry generates a new course; --seed sets only the first course.\n"
@@ -548,8 +635,7 @@ int main(int argc, char **argv)
     std::signal(SIGHUP, stop);
     bb::Terminal terminal;
     bb::Game game(seed);
-    int best = loadBest(), savedBest = best;
-    int bestStreak = loadBest("best-streak");
+    RunRecords records;
     bool started = false, paused = false, held = false;
     int mx = terminal.columns / 2, my = terminal.rows - 4;
     using Clock = std::chrono::steady_clock;
@@ -589,6 +675,11 @@ int main(int argc, char **argv)
             applyTheme(theme);
             saveTheme(theme);
           }
+          if (key == 'x' || key == 'X')
+          {
+            game.debugSwitchMode();
+            records.update(game);
+          }
           if (key == 'p' || key == 'P')
           {
             paused = !paused;
@@ -596,7 +687,9 @@ int main(int argc, char **argv)
           }
           if (key == 'r' || key == 'R' || ((key == '\r' || key == '\n') && game.dead))
           {
+            records.finish();
             game.reset();
+            records.beginRun();
             started = true;
             paused = false;
             held = false;
@@ -623,17 +716,7 @@ int main(int argc, char **argv)
         if (small || game.dead)
           held = false;
       }
-      best = std::max(best, game.score());
-      if (game.combo > bestStreak)
-      {
-        bestStreak = game.combo;
-        saveBest(bestStreak, "best-streak");
-      }
-      if (game.dead && best > savedBest)
-      {
-        saveBest(best);
-        savedBest = best;
-      }
+      records.update(game);
       applyTheme(theme, game.altitude);
       Screen screen(std::max(6, terminal.columns), std::max(8, terminal.rows), game.camera);
       if (small)
@@ -649,7 +732,7 @@ int main(int argc, char **argv)
         if (game.shake > 0)
           screen.bottom += std::sin(game.time * 130) * game.shake * 0.8;
         screen.world(game, aim);
-        screen.hud(game, best, bestStreak);
+        screen.hud(game, records.best, records.bestStreak);
         auto phase = themePhase(theme, game.altitude);
         std::string style = themes[phase.current].name;
         if (phase.blend > 0)
@@ -660,7 +743,7 @@ int main(int argc, char **argv)
         else if (game.dead)
           screen.panel(terminal.rows / 2 - 5, {"R U N  O V E R", game.deathReason, "",
                                                "HEIGHT " + std::to_string(game.score()) + " METERS",
-                                               std::to_string(game.kills) + " HUNTERS DOWN  /  BEST " + std::to_string(best) + " m", "",
+                                               std::to_string(game.kills) + " HUNTERS DOWN  /  BEST " + std::to_string(records.best) + " m", "",
                                                "R / ENTER: instant retry    Q: leave"});
         else if (paused)
           screen.panel(terminal.rows / 2 - 2, {"P A U S E D", "P: resume   R: retry   Q: quit"});
@@ -670,8 +753,7 @@ int main(int argc, char **argv)
       terminal.write(screen.frame());
       std::this_thread::sleep_until(frameStart + std::chrono::microseconds(16667));
     }
-    if (best > savedBest)
-      saveBest(best);
+    records.finish();
   }
   catch (const std::exception &e)
   {

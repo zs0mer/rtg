@@ -324,11 +324,259 @@ def state_compatibility(binary):
                 )
 
 
+def debug_runs(binary):
+    for preloaded in (True, False):
+        with tempfile.TemporaryDirectory() as state:
+            current = os.path.join(state, "zapy")
+            baseline = {
+                "best-height": b"1\n",
+                "best-streak": b"7\n",
+                "theme": b"prism\n",
+            }
+            if preloaded:
+                os.mkdir(current)
+                for name, contents in baseline.items():
+                    with open(os.path.join(current, name), "wb") as saved:
+                        saved.write(contents)
+
+            def unchanged():
+                if preloaded:
+                    check(
+                        set(os.listdir(current)) == set(baseline),
+                        "unranked run added state files",
+                    )
+                    for name, contents in baseline.items():
+                        with open(os.path.join(current, name), "rb") as saved:
+                            check(
+                                saved.read() == contents, f"unranked run changed {name}"
+                            )
+                else:
+                    for name in ("best-height", "best-streak"):
+                        path = os.path.join(current, name)
+                        if os.path.exists(path):
+                            with open(path, "rb") as saved:
+                                check(
+                                    int(saved.read()) == 0,
+                                    f"fresh debug run wrote a positive {name}",
+                                )
+                        check(
+                            not os.path.exists(path + ".tmp"),
+                            "debug run left a temporary record",
+                        )
+
+            def launch(eligible=False):
+                master, slave = pty.openpty()
+                original = termios.tcgetattr(slave)
+                fcntl.ioctl(
+                    slave, termios.TIOCSWINSZ, struct.pack("HHHH", 38, 110, 0, 0)
+                )
+                proc = subprocess.Popen(
+                    [binary, "--seed", "42"],
+                    stdin=slave,
+                    stdout=slave,
+                    stderr=slave,
+                    env={**os.environ, "XDG_STATE_HOME": state},
+                )
+                output = bytearray()
+
+                def frame(predicate, timeout=4):
+                    start = len(output)
+                    deadline = time.monotonic() + timeout
+                    while time.monotonic() < deadline:
+                        # A following home sequence terminates a complete frame.
+                        frames = bytes(output[start:]).split(b"\033[H")[1:-1]
+                        for raw in frames:
+                            plain = re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]", b"", raw)
+                            lines = plain.split(b"\r\n")
+                            if len(lines) == 38 and predicate(lines):
+                                strip = lines[-1]
+                                check(
+                                    b"LMB fire" in strip,
+                                    "visible control strip is missing",
+                                )
+                                check(
+                                    not re.search(
+                                        rb"\b[xX]\b|debug|switch|cycle|unranked",
+                                        strip,
+                                        re.I,
+                                    ),
+                                    "hidden mode key is advertised in control strip",
+                                )
+                                return lines
+                        if proc.poll() is not None:
+                            break
+                        if select.select([master], [], [], 0.1)[0]:
+                            try:
+                                data = os.read(master, 65536)
+                            except OSError as exc:
+                                if exc.errno == errno.EIO:
+                                    break
+                                raise
+                            if not data:
+                                break
+                            output.extend(data)
+                    raise AssertionError("Missing debug-run terminal frame")
+
+                def mode(lines, name, unranked=True):
+                    return name in lines[-5] and (b"UNRANKED" in lines[0]) == unranked
+
+                def height(lines):
+                    match = re.search(rb"HEIGHT (\d+) m", lines[1])
+                    return int(match[1]) if match else -1
+
+                def fire():
+                    os.write(master, b"\033[<0;55;32M")
+                    risen = frame(lambda lines: height(lines) > 1, timeout=6)
+                    os.write(master, b"\033[<0;55;32m")
+                    return risen
+
+                try:
+                    frame(lambda lines: b"CLICK TO DROP IN" in b"\n".join(lines))
+                    os.write(master, b"x")
+                    frame(
+                        lambda lines: (
+                            mode(lines, b"LONGSHOT")
+                            and b"CLICK TO DROP IN" in b"\n".join(lines)
+                        )
+                    )
+                    os.write(master, b"\rp")
+                    frame(lambda lines: b"P A U S E D" in b"\n".join(lines))
+                    os.write(master, b"X")
+                    frame(
+                        lambda lines: (
+                            mode(lines, b"SCATTER")
+                            and b"P A U S E D" in b"\n".join(lines)
+                        )
+                    )
+                    os.write(master, b"x")
+                    frame(
+                        lambda lines: (
+                            mode(lines, b"NORMAL")
+                            and b"P A U S E D" in b"\n".join(lines)
+                        )
+                    )
+                    os.write(master, b"p")
+                    frame(
+                        lambda lines: (
+                            mode(lines, b"NORMAL")
+                            and b"P A U S E D" not in b"\n".join(lines)
+                        )
+                    )
+                    risen = fire()
+                    check(
+                        mode(risen, b"NORMAL"), "cycled Normal shot run lost UNRANKED"
+                    )
+                    check(
+                        re.search(
+                            rb"BEST " + (b"1" if preloaded else b"0") + rb" m\b",
+                            risen[1],
+                        )
+                        and re.search(
+                            rb"BEST " + (b"7" if preloaded else b"0") + rb"\b", risen[5]
+                        ),
+                        "unranked HUD replaced legitimate height/streak records",
+                    )
+                    unchanged()
+                    frame(
+                        lambda lines: b"R U N  O V E R" in b"\n".join(lines), timeout=25
+                    )
+                    os.write(master, b"X")
+                    frame(
+                        lambda lines: (
+                            mode(lines, b"NORMAL")
+                            and b"R U N  O V E R" in b"\n".join(lines)
+                        )
+                    )
+                    unchanged()
+                    if eligible:
+                        os.write(master, b"R")
+                        frame(
+                            lambda lines: (
+                                mode(lines, b"NORMAL", False) and height(lines) == 0
+                            )
+                        )
+                        fire()
+                        # Disqualify provisional height and reset in the same input batch.
+                        os.write(master, b"XRp")
+                        frame(
+                            lambda lines: (
+                                mode(lines, b"NORMAL", False)
+                                and b"P A U S E D" in b"\n".join(lines)
+                            )
+                        )
+                        unchanged()
+                        os.write(master, b"R")
+                        frame(
+                            lambda lines: (
+                                mode(lines, b"NORMAL", False) and height(lines) == 0
+                            )
+                        )
+                        fire()
+                        os.write(master, b"R")
+                        frame(
+                            lambda lines: (
+                                mode(lines, b"NORMAL", False) and height(lines) == 0
+                            )
+                        )
+                        with open(os.path.join(current, "best-height"), "rb") as saved:
+                            check(
+                                int(saved.read()) > 1,
+                                "R did not finish an eligible post-debug run",
+                            )
+                        for name in ("best-streak", "theme"):
+                            with open(os.path.join(current, name), "rb") as saved:
+                                check(
+                                    saved.read() == baseline[name],
+                                    f"eligible retry changed {name}",
+                                )
+                    os.write(master, b"q")
+                    deadline = time.monotonic() + 4
+                    while b"\033[?1049l" not in output and time.monotonic() < deadline:
+                        if select.select([master], [], [], 0.1)[0]:
+                            try:
+                                output.extend(os.read(master, 65536))
+                            except OSError as exc:
+                                if exc.errno == errno.EIO:
+                                    break
+                                raise
+                    proc.wait(timeout=4)
+                    check(
+                        proc.returncode == 0, "debug-run launch exited unsuccessfully"
+                    )
+                    check(
+                        b"\033[?1049l" in output,
+                        "debug-run launch did not leave alternate screen",
+                    )
+                    check(
+                        termios.tcgetattr(slave) == original,
+                        "debug-run launch did not restore terminal",
+                    )
+                finally:
+                    if proc.poll() is None:
+                        proc.kill()
+                        proc.wait(timeout=4)
+                    os.close(master)
+                    os.close(slave)
+
+            launch()
+            unchanged()
+            if preloaded:
+                launch(eligible=True)
+
+
 if __name__ == "__main__":
     binary = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else "build/zapy")
     help_output = subprocess.check_output([binary, "--help"])
     check(b"zapy" in help_output.lower(), "Zapy help branding is missing")
     check(b"backblast" not in help_output.lower(), "legacy branding remains in help")
+    check(
+        not re.search(
+            rb"\b[xX]\s*(?:/\s*[xX]\s*)?:|\b[xX]\s+(?:mode|switch|cycle)|debug|unranked|cycle",
+            help_output,
+            re.I,
+        ),
+        "hidden mode key is advertised in --help",
+    )
     styles = subprocess.check_output([binary, "--list-themes"], text=True).splitlines()
     check(
         len(styles) == 10 and len(set(styles)) == 10,
@@ -340,8 +588,9 @@ if __name__ == "__main__":
         "invalid style was not rejected",
     )
     state_compatibility(binary)
+    debug_runs(binary)
     run(binary)
     run(binary, interrupt=True)
     print(
-        "PASS: start, mouse fire, pause/resume, resize, retry, quit, SIGINT, persistence, legacy preference fallback/new-file precedence, terminal restoration"
+        "PASS: start, mouse fire, pause/resume, resize, retry, quit, SIGINT, persistence, hidden mode cycling/unranked record isolation/retry eligibility, legacy preference fallback/new-file precedence, terminal restoration"
     )

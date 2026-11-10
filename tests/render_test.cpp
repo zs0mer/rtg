@@ -328,6 +328,106 @@ namespace
     return plain;
   }
 
+  std::vector<Cell> decodeHud(const Screen &screen, int columns, int rows)
+  {
+    std::vector<Cell> result;
+    RGB fg = ink, bg = ink;
+    const std::string frame = screen.frame();
+    for (size_t i = 0; i < frame.size();)
+    {
+      if (frame[i] == '\033')
+      {
+        check(i + 1 < frame.size() && frame[i + 1] == '[', "valid HUD CSI escape");
+        size_t end = frame.find_first_of("Hm", i + 2);
+        check(end != std::string::npos, "terminated HUD CSI escape");
+        if (frame[end] == 'm')
+        {
+          std::string parameters = frame.substr(i + 2, end - i - 2);
+          std::replace(parameters.begin(), parameters.end(), ';', ' ');
+          std::istringstream input(parameters);
+          int code = 0;
+          input >> code;
+          if (code == 38 || code == 48)
+          {
+            int mode = 0;
+            RGB color{};
+            input >> mode >> color.r >> color.g >> color.b;
+            check(bool(input) && mode == 2, "HUD truecolor SGR");
+            (code == 38 ? fg : bg) = color;
+          }
+          else if (code == 49)
+            bg = ink;
+          else
+            check(code == 0 || code == 1, "supported HUD SGR");
+        }
+        i = end + 1;
+      }
+      else if (frame[i] == '\r' || frame[i] == '\n')
+        ++i;
+      else
+      {
+        size_t length = frame.compare(i, 3, "▀") == 0 || frame.compare(i, 3, "▄") == 0 ? 3 : 1;
+        result.push_back({fg, bg, frame.substr(i, length)});
+        i += length;
+      }
+    }
+    check(result.size() == static_cast<size_t>(columns * rows), "complete decoded HUD frame");
+    return result;
+  }
+
+  void velocityRendering()
+  {
+    for (auto [columns, rows] : {std::pair{72, 24}, {104, 36}, {110, 38}, {180, 50}})
+      for (size_t theme = 0; theme < themes.size(); ++theme)
+        for (Vec velocity : {Vec{}, Vec{3, 4}, Vec{-30, -40}, Vec{56.999, 0}, Vec{0, -57},
+                             Vec{57.001, 0}, Vec{-48, 64}, Vec{90, -120}})
+        {
+          double speed = velocity.length();
+          context = "velocity " + std::to_string(columns) + "x" + std::to_string(rows) +
+                    " " + themes[theme].name + " speed=" + std::to_string(speed);
+          applyTheme(theme, 650);
+          auto g = emptyWorld();
+          g.player.vel = velocity;
+          g.combo = 123;
+          Screen screen(columns, rows, 0);
+          screen.world(g, {50, -9990});
+          screen.hud(g, 987, 42);
+          auto actual = decodeHud(screen, columns, rows);
+          auto at = [&](int x, int y) -> const Cell & { return actual.at(static_cast<size_t>(y * columns + x)); };
+          auto label = [&](int x, int y, const std::string &text, RGB color)
+          {
+            for (size_t i = 0; i < text.size(); ++i)
+              check(at(x + static_cast<int>(i), y).glyph == text.substr(i, 1) &&
+                        at(x + static_cast<int>(i), y).fg == color, "meter text and color");
+          };
+          bool overcap = speed > 57;
+          RGB color = overcap ? RGB{255, 55, 20} : cyan;
+          label(3, 4, "VELOCITY", cyan);
+          label(3, 5, "SOFT 57", RGB{255, 220, 35});
+          label(3, 11, overcap ? "OVERCAP" : "u/s", color);
+          int filled = std::clamp(static_cast<int>(speed / 57 * 9), 0, 9);
+          label(3, 12, std::string(filled, '=') + std::string(9 - filled, '.'), color);
+          label(12, 12, "|", RGB{255, 220, 35});
+          label(13, 12, overcap ? "!" : ".", overcap ? RGB{255, 55, 20} : muted);
+          Screen digits(columns, rows, 0);
+          digits.bigNumber(3, 6, static_cast<int>(std::lround(speed)), speed > 0 ? color : muted);
+          auto expected = decodeHud(digits, columns, rows);
+          for (int y = 6; y <= 10; ++y)
+            for (int x = 3; x < 14; ++x)
+            {
+              const Cell &e = expected.at(static_cast<size_t>(y * columns + x));
+              check(at(x, y).glyph == e.glyph && at(x, y).bg == e.bg &&
+                        (e.glyph == " " || at(x, y).fg == e.fg), "rounded combined velocity digits");
+            }
+          label(columns - 14, 4, "STREAK", cyan);
+          label(2, rows - 6, "HP", repair);
+          label(columns - 26, rows - 6, "AMMO", gold);
+          Screen mapping(columns, rows, 0);
+          check(screen.point({50, 20}) == mapping.point({50, 20}) && screen.scale == mapping.scale,
+                "HUD does not alter world mapping");
+        }
+  }
+
   void streakRendering()
   {
     applyTheme(0);
@@ -367,10 +467,16 @@ namespace
                     actual.at(5).substr(x, width) == label + std::string(width - label.size(), ' '),
                 "full streak record fits directly below heading, including after combo expires");
           Screen digits(columns, rows, 0);
-          digits.bigNumber(x, 6, combo, gold);
-          auto expected = lines(digits);
+          digits.bigNumber(x, 6, combo, combo > 0 ? gold : muted);
+          auto decoded = decodeHud(screen, columns, rows);
+          auto expected = decodeHud(digits, columns, rows);
           for (int row = 6; row <= 10; ++row)
-            check(actual.at(row) == expected.at(row), "current streak digits remain on rows 6 through 10");
+            for (int col = x; col < x + width; ++col)
+            {
+              size_t index = static_cast<size_t>(row * columns + col);
+              check(decoded[index].glyph == expected[index].glyph && decoded[index].bg == expected[index].bg,
+                    "current streak digits remain on rows 6 through 10");
+            }
           int remaining = combo ? width / 2 : 0;
           check(actual.at(12).substr(x, width) == std::string(remaining, '=') + std::string(width - remaining, '.'),
                 "countdown remains on row 12 with the full panel width");
@@ -425,6 +531,135 @@ namespace
       file << "-7\n";
     }
     check(loadBest("best-streak") == 0, "negative streak record is clamped to zero");
+
+    saveBest(42);
+    saveBest(7, "best-streak");
+    auto contents = [&](const char *name)
+    {
+      std::ifstream file(state.path / "zapy" / name);
+      return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+    };
+    const auto theme = contents("theme");
+    auto unchanged = [&]
+    {
+      check(contents("best-height") == "42\n", "unranked run preserves saved height bytes");
+      check(contents("best-streak") == "7\n", "unranked run preserves saved streak bytes");
+      check(contents("theme") == theme, "record tracking preserves theme bytes");
+      check(!std::filesystem::exists(state.path / "zapy/best-height.tmp") &&
+                !std::filesystem::exists(state.path / "zapy/best-streak.tmp"),
+            "record tracking leaves no temporary files");
+    };
+    {
+      context = "debug-first run records";
+      RunRecords records;
+      records.beginRun();
+      check(records.best == 42 && records.bestStreak == 7, "loads legitimate run baselines");
+      bb::Game game(42);
+      check(game.debugSwitchMode() && game.shotMode == bb::ShotMode::Longshot && game.debugUsed,
+            "alive debug switch starts deterministic cycle and marks run");
+      game.altitude = 100;
+      game.combo = 12;
+      game.comboTime = 1;
+      records.update(game);
+      check(records.best == 42 && records.bestStreak == 7, "debug height and combo never become records");
+      unchanged();
+      check(game.debugSwitchMode() && game.shotMode == bb::ShotMode::Scatter, "second debug switch selects Scatter");
+      check(game.debugSwitchMode() && game.shotMode == bb::ShotMode::Normal && game.debugUsed,
+            "cycling back to Normal remains unranked");
+      records.update(game);
+      Screen hud(110, 38, 0);
+      hud.hud(game, records.best, records.bestStreak);
+      const auto plain = stripAnsi(hud.frame());
+      check(plain.find("UNRANKED") != std::string::npos && plain.find("HEIGHT 100 m") != std::string::npos &&
+                plain.find("BEST 42 m") != std::string::npos && plain.find("BEST 7") != std::string::npos,
+            "unranked HUD keeps current height and legitimate records");
+      Screen digits(110, 38, 0);
+      digits.bigNumber(98, 6, 12, gold);
+      auto actual = decodeHud(hud, 110, 38), expected = decodeHud(digits, 110, 38);
+      for (int row = 6; row <= 10; ++row)
+        for (int col = 98; col < 105; ++col)
+        {
+          size_t index = static_cast<size_t>(row * 110 + col);
+          check(actual[index].glyph == expected[index].glyph && actual[index].bg == expected[index].bg,
+                "unranked HUD still displays current streak digits");
+        }
+      game.dead = true;
+      records.update(game);
+      records.finish();
+      check(records.best == 42 && records.bestStreak == 7, "debug death and finish cannot award records");
+      unchanged();
+    }
+    {
+      context = "midrun debug rollback";
+      RunRecords records;
+      bb::Game game(42);
+      game.altitude = 100;
+      game.combo = 12;
+      records.update(game);
+      check(records.best == 100 && records.bestStreak == 12, "normal updates accumulate provisional records");
+      check(contents("best-height") == "42\n", "legitimate height waits for finish");
+      check(contents("best-streak") == "12\n", "legitimate streak is persisted immediately");
+      check(game.debugSwitchMode(), "midrun debug switch succeeds");
+      records.update(game);
+      check(records.best == 42 && records.bestStreak == 7, "debug withdraws this run's earlier records");
+      unchanged();
+      const auto heightTime = std::filesystem::last_write_time(state.path / "zapy/best-height");
+      const auto streakTime = std::filesystem::last_write_time(state.path / "zapy/best-streak");
+      for (int i = 0; i < 6; ++i)
+      {
+        check(game.debugSwitchMode(), "repeated alive debug switch succeeds");
+        records.update(game);
+        records.finish();
+      }
+      check(std::filesystem::last_write_time(state.path / "zapy/best-height") == heightTime &&
+                std::filesystem::last_write_time(state.path / "zapy/best-streak") == streakTime,
+            "repeated debug updates and finish do not rewrite records");
+      game.reset(42);
+      check(!game.debugUsed && game.shotMode == bb::ShotMode::Normal, "reset clears debug state and restores Normal");
+      game.altitude = 150;
+      game.combo = 20;
+      records.update(game);
+      records.finish();
+      check(records.best == 42 && records.bestStreak == 7, "record lock survives game flag clearing without beginRun");
+      unchanged();
+
+      game.reset(42);
+      records.beginRun();
+      game.altitude = 80;
+      game.combo = 9;
+      records.update(game);
+      check(records.best == 80 && records.bestStreak == 9, "new run is eligible after reset and beginRun");
+      check(contents("best-height") == "42\n" && contents("best-streak") == "9\n",
+            "new legitimate run keeps deferred height and immediate streak persistence");
+      records.finish();
+      check(contents("best-height") == "80\n", "finish persists pending legitimate height");
+      game.reset(42);
+      records.beginRun();
+      game.altitude = 90;
+      game.combo = 10;
+      game.dead = true;
+      records.update(game);
+      check(contents("best-height") == "90\n" && contents("best-streak") == "10\n",
+            "normal death finishes legitimate records");
+      check(!game.debugSwitchMode() && !game.debugUsed && game.shotMode == bb::ShotMode::Normal,
+            "dead debug is ignored without marking run");
+      records.update(game);
+      records.finish();
+      RunRecords reloaded;
+      check(reloaded.best == 90 && reloaded.bestStreak == 10, "dead debug cannot withdraw finished records");
+      game.reset(42);
+      records.beginRun();
+      game.altitude = 110;
+      game.combo = 15;
+      records.update(game);
+      check(game.debugSwitchMode(), "debug switch succeeds in later run");
+      records.update(game);
+      records.finish();
+      check(records.best == 90 && records.bestStreak == 10 &&
+                contents("best-height") == "90\n" && contents("best-streak") == "10\n",
+            "beginRun refreshes rollback baselines to latest legitimate records");
+      check(contents("theme") == theme, "legitimate records preserve theme");
+    }
   }
 
   void introRendering()
@@ -484,6 +719,154 @@ namespace
                 lines.at(panelY + 14).substr(panelX, panelWidth) == std::string(panelWidth, ' '),
             "panel clears its top and bottom padding");
     }
+  }
+
+  void fireParticleRendering()
+  {
+    constexpr RGB yellow{255, 220, 35}, burningRed{255, 55, 20};
+    for (auto [columns, rows] : {std::pair{72, 24}, {104, 36}, {128, 50}})
+      for (size_t theme = 0; theme < themes.size(); ++theme)
+        for (double altitude : {0.0, 650.0})
+          for (int mode = 0; mode < 3; ++mode)
+          {
+            context = "fire particles " + std::to_string(columns) + "x" + std::to_string(rows) +
+                      " " + themes[theme].name + " altitude=" + std::to_string(altitude) +
+                      " mode=" + std::to_string(mode);
+            applyTheme(theme, altitude);
+            auto g = emptyWorld();
+            g.camera = 10;
+            g.shotMode = static_cast<bb::ShotMode>(mode);
+            g.particles = {{{35, 30}, {0, -8}, 1, 1, 4, g.shotMode},
+                           {{45, 30}, {0, -8}, 1, 1, 5, g.shotMode},
+                           {{55, 30}, {0, -8}, 0.5, 1, 4, g.shotMode},
+                           {{65, 30}, {0, -8}, 0.5, 1, 5, g.shotMode}};
+            Screen mapping(columns, rows, g.camera);
+            Image image = render(g, columns, rows);
+            const RGB expected[] = {yellow, burningRed, dim(yellow, 0.5), dim(burningRed, 0.5)};
+            for (size_t i = 0; i < g.particles.size(); ++i)
+            {
+              auto [x, y] = mapping.point(g.particles[i].pos);
+              check(image.at(x, y) == expected[i], "fire particle RGB and lifetime fade ignore theme and shot mode");
+            }
+          }
+  }
+
+  void heatShieldRendering()
+  {
+    constexpr RGB shieldYellow{255, 220, 35}, shieldRed{255, 55, 20};
+    for (auto [columns, rows] : {std::pair{72, 24}, {104, 36}, {128, 50}})
+      for (size_t theme = 0; theme < themes.size(); ++theme)
+      {
+        context = "heat shield " + std::to_string(columns) + "x" + std::to_string(rows) +
+                  " " + themes[theme].name;
+        applyTheme(theme);
+        auto g = emptyWorld();
+        g.player.pos = {50, 20};
+        g.player.vel = {0, 110};
+        g.camera = 10;
+        g.modeTarget = {50, 10000};
+        Screen mapping(columns, rows, g.camera);
+        const auto [bodyX, bodyY] = mapping.point(g.player.pos);
+        int radius = static_cast<int>(1.1 * mapping.scale) + 1;
+        auto isFire = [&](RGB color) { return color == shieldYellow || color == shieldRed; };
+        auto absent = [&](const Image &image)
+        {
+          for (RGB color : image.pixels)
+            check(!isFire(color), "inactive shield has no body outline or flame pixels");
+        };
+        check(bb::Game::heatShieldSpeedThreshold == 60, "shield speed threshold is 60");
+        check(bb::Game::softSpeedThreshold == 57, "soft physics threshold remains 57");
+        check(!g.heatShieldActive(), "speed alone does not activate the shield");
+        absent(render(g, columns, rows));
+        auto chargeStep = [&]
+        {
+          g.player.pos = {50, 20};
+          g.player.vel = {0, 110};
+          g.player.invulnerable = 100;
+          g.lava = -10000;
+          g.update(1.0 / 120);
+          g.platforms.clear();
+          g.enemies.clear();
+          g.bullets.clear();
+          g.pickups.clear();
+          g.particles.clear();
+        };
+        for (int i = 0; i < 359; ++i)
+          chargeStep();
+        check(!g.heatShieldActive(), "shield remains hidden before three seconds");
+        g.player.pos = {50, 20};
+        absent(render(g, columns, rows));
+        chargeStep();
+        chargeStep();
+        check(g.heatShieldActive() && !g.dead, "continuous overspeed activates rendering fixture");
+        g.player.pos = {50, 20};
+        g.player.invulnerable = 0;
+        g.time = 0;
+        Image visible = render(g, columns, rows);
+        auto bodyEffect = [&](const Image &image)
+        {
+          int yellow = 0, burningRed = 0;
+          for (int y = 0; y < image.height; ++y)
+            for (int x = 0; x < image.width; ++x)
+              if (isFire(image.at(x, y)))
+              {
+                int dx = std::abs(x - bodyX);
+                int top = bodyY - radius;
+                check((y == top && dx <= radius) ||
+                          (dx == radius && y > top && y <= top + radius * 2 + 2),
+                      "heat is one pixel thick across the top and one pixel wide down each side");
+                yellow += image.at(x, y) == shieldYellow;
+                burningRed += image.at(x, y) == shieldRed;
+              }
+          check(yellow > 0 && burningRed > 0, "body effect uses both fixed yellow and red fire colors");
+          for (int offset = -radius; offset <= radius; ++offset)
+            check(isFire(image.at(bodyX + offset, bodyY - radius)),
+                  "boiling heat covers the character top in a thin layer");
+          check(!isFire(image.at(bodyX, bodyY + radius)), "no bottom crossbar surrounds the character");
+        };
+        bodyEffect(visible);
+        check(visible.at(bodyX - radius, bodyY - radius + 1) == shieldYellow,
+              "left drip begins immediately below the boiling top");
+        check(visible.at(bodyX + radius, bodyY + 2) == shieldYellow,
+              "right drip runs out of phase down the other side");
+        g.time = 0.125;
+        Image animated = render(g, columns, rows);
+        bodyEffect(animated);
+        check(animated.pixels != visible.pixels, "burning shield visibly animates with time");
+        check(animated.at(bodyX - radius, bodyY - radius + 1) == shieldRed &&
+                  animated.at(bodyX - radius, bodyY - radius + 2) == shieldYellow,
+              "left yellow droplet moves down leaving a red tail");
+        check(animated.at(bodyX + radius, bodyY + 3) == shieldYellow,
+              "right droplet also advances down the character side");
+        check(animated.at(bodyX, bodyY - radius) != visible.at(bodyX, bodyY - radius),
+              "boiling top flickers between yellow and red");
+        check(!(visible.at(bodyX, bodyY) == ink), "player is visible inside the heat outline");
+        g.time = 1.0 / 18;
+        visible = render(g, columns, rows);
+        g.player.invulnerable = 1;
+        Image blinking = render(g, columns, rows);
+        check(blinking.at(bodyX, bodyY) == ink, "invulnerability blink hides player body");
+        bodyEffect(blinking);
+        for (int y = 0; y < visible.height; ++y)
+          for (int x = 0; x < visible.width; ++x)
+            if (isFire(visible.at(x, y)) || isFire(blinking.at(x, y)))
+              check(blinking.at(x, y) == visible.at(x, y), "body shield survives player blink unchanged");
+        auto slowed = g;
+        slowed.player.vel = {60, 0};
+        check(slowed.heatShieldActive(), "shield remains visible at speed 60 during grace period");
+        bodyEffect(render(slowed, columns, rows));
+        slowed.player.vel = {59, 0};
+        slowed.heatShieldBelowTime = 0.999;
+        check(slowed.heatShieldActive(), "shield remains visible just before one-second slowdown expiry");
+        bodyEffect(render(slowed, columns, rows));
+        slowed.player.vel = {};
+        slowed.heatShieldBelowTime = 1;
+        check(!slowed.heatShieldActive(), "shield disappears after one second below threshold");
+        absent(render(slowed, columns, rows));
+        g.dead = true;
+        check(!g.heatShieldActive(), "dead player has no active shield");
+        absent(render(g, columns, rows));
+      }
   }
 
   void warningBounds()
@@ -554,6 +937,9 @@ int main()
   {
     themeRendering();
     shotRendering();
+    heatShieldRendering();
+    velocityRendering();
+    fireParticleRendering();
     warningBounds();
     introRendering();
     streakRendering();

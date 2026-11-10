@@ -31,11 +31,12 @@ namespace bb
     bullets.clear();
     particles.clear();
     pickups.clear();
-    camera = altitude = time = shake = flash = comboTime = 0;
+    camera = altitude = time = shake = flash = comboTime = scatterBoost = overspeedTime = heatShieldBelowTime = 0;
     lava = -22;
     kills = combo = bonus = 0;
     generated = 1;
     dead = false;
+    debugUsed = false;
     deathReason.clear();
     generate(160);
   }
@@ -59,12 +60,22 @@ namespace bb
       return "NORMAL";
     }
   }
+  bool Game::debugSwitchMode()
+  {
+    if (dead)
+      return false;
+    shotMode = static_cast<ShotMode>((static_cast<int>(shotMode) + 1) % 3);
+    debugUsed = true;
+    return true;
+  }
   bool Game::shoot(Vec target)
   {
     if (dead || player.cooldown > 0 || player.shells <= 0)
       return false;
     Vec aim = (target - player.pos).unit();
-    double recoil = 25 * (shotMode == ShotMode::Scatter ? 0.9 : 1.0);
+    const bool boostedScatter = shotMode == ShotMode::Scatter && scatterBoost > 0;
+    double baseRecoil = 25 - 10 * std::clamp((player.vel.length() - 25) / (softSpeedThreshold - 25), 0.0, 1.0);
+    double recoil = baseRecoil * (shotMode == ShotMode::Scatter ? (boostedScatter ? 1.70 : 0.85) : 1.0);
     Vec impulse = aim * -recoil;
     if (shotMode == ShotMode::Longshot)
     {
@@ -72,10 +83,7 @@ namespace bb
       impulse.y *= 1.1;
     }
     player.vel += impulse;
-    // Preserve momentum, but keep repeated blasts controllable.
-    double speed = player.vel.length();
-    if (speed > 57)
-      player.vel = player.vel * (57 / speed);
+
     --player.shells;
     player.cooldown = 0.19;
     player.reload = 0;
@@ -85,18 +93,19 @@ namespace bb
     double angle = std::atan2(aim.y, aim.x);
     int count = shotMode == ShotMode::Longshot ? 2 : shotMode == ShotMode::Scatter ? 24
                                                                                    : 10;
-    double spread = shotMode == ShotMode::Longshot ? 0.025 : shotMode == ShotMode::Scatter ? 0.48
+    double spread = shotMode == ShotMode::Longshot ? 0.025 : shotMode == ShotMode::Scatter ? 0.55
                                                                                            : 0.19;
     double life = shotMode == ShotMode::Longshot ? 0.9 : shotMode == ShotMode::Scatter ? 0.14
-                                                                                       : 0.34;
-    auto killRecoil = shotMode == ShotMode::Scatter ? std::make_shared<KillRecoil>(KillRecoil{aim * (-25 * 0.85), false}) : nullptr;
+                                                                                       : 0.30;
+    // Boosted blasts already received their kill recoil; older blasts retain their unused bonus.
+    auto killRecoil = shotMode == ShotMode::Scatter ? std::make_shared<KillRecoil>(KillRecoil{aim * (-baseRecoil * 0.85), boostedScatter}) : nullptr;
     for (int i = 0; i < count; ++i)
     {
       double a = angle + random(-spread, spread);
       double velocity = shotMode == ShotMode::Longshot ? random(155, 165) : random(95, 125);
       bullets.push_back({player.pos + aim * 1.1, Vec{std::cos(a), std::sin(a)} * velocity, life, false, killRecoil,
                          shotMode == ShotMode::Longshot ? 2.5 : 0.55,
-                         shotMode == ShotMode::Longshot ? 5.0 : shotMode == ShotMode::Scatter ? 0.85 : 1.0, shotMode});
+                         shotMode == ShotMode::Longshot ? 5.0 : 1.0, shotMode});
     }
     burst(player.pos + aim * 1.5, 10, 0, 17, shotMode);
     return true;
@@ -112,9 +121,9 @@ namespace bb
     burst(modeTarget, 50, 1, 24);
     shake = 0.3;
   }
-  void Game::damage(Vec from, const char *reason)
+  void Game::damage(Vec from, const char *reason, bool blockedByHeatShield)
   {
-    if (dead || player.invulnerable > 0)
+    if (dead || player.invulnerable > 0 || (blockedByHeatShield && heatShieldActive()))
       return;
     --player.hp;
     player.invulnerable = 1.25;
@@ -158,6 +167,7 @@ namespace bb
     dt = std::clamp(dt, 0.0, 1.0 / 30);
     time += dt;
     modeTargetCooldown = std::max(0.0, modeTargetCooldown - dt);
+    scatterBoost = std::max(0.0, scatterBoost - dt);
     shake = std::max(0.0, shake - dt);
     flash = std::max(0.0, flash - dt);
     player.cooldown = std::max(0.0, player.cooldown - dt);
@@ -177,21 +187,27 @@ namespace bb
     Vec old = player.pos;
     player.vel.y -= gravity * dt;
     player.vel.x *= std::exp(-0.26 * dt);
+    double speed = player.vel.length();
+    if (speed > softSpeedThreshold)
+    {
+      double deceleration = (speed - softSpeedThreshold) / overspeedSeconds;
+      player.vel = player.vel * ((speed - deceleration * dt) / speed);
+    }
     player.pos += player.vel * dt;
     if (player.pos.x < radius)
     {
       player.pos.x = radius;
-      player.vel.x = std::abs(player.vel.x) * 0.78;
+      player.vel.x = std::max(12.0, std::abs(player.vel.x) * 0.78);
       if (player.vel.y > 0)
-        player.vel.y *= 0.85;
+        player.vel.y *= 0.75;
       burst(player.pos, 4, 1, 8);
     }
     if (player.pos.x > width - radius)
     {
       player.pos.x = width - radius;
-      player.vel.x = -std::abs(player.vel.x) * 0.78;
+      player.vel.x = -std::max(12.0, std::abs(player.vel.x) * 0.78);
       if (player.vel.y > 0)
-        player.vel.y *= 0.85;
+        player.vel.y *= 0.75;
       burst(player.pos, 4, 1, 8);
     }
     for (const auto &p : platforms)
@@ -225,6 +241,29 @@ namespace bb
         break;
       }
     }
+    double shieldSpeed = player.vel.length();
+    if (shieldSpeed > heatShieldSpeedThreshold ||
+        (heatShieldActive() && shieldSpeed >= heatShieldSpeedThreshold))
+    {
+      heatShieldBelowTime = 0;
+      overspeedTime = std::min(heatShieldChargeSeconds, overspeedTime + dt);
+      if (heatShieldChargeSeconds - overspeedTime < 1e-9)
+        overspeedTime = heatShieldChargeSeconds;
+    }
+    else if (overspeedTime >= heatShieldChargeSeconds)
+    {
+      heatShieldBelowTime = std::min(heatShieldGraceSeconds, heatShieldBelowTime + dt);
+      if (heatShieldGraceSeconds - heatShieldBelowTime < 1e-9)
+      {
+        heatShieldBelowTime = heatShieldGraceSeconds;
+        overspeedTime = 0;
+      }
+    }
+    else
+    {
+      overspeedTime = 0;
+      heatShieldBelowTime = 0;
+    }
     altitude = std::max(altitude, player.pos.y - 3);
     camera = std::max(camera, player.pos.y - 16);
     // Replace a circle only after it has left the playable view, even if skipped.
@@ -250,6 +289,8 @@ namespace bb
     generate(camera + 150);
     for (auto &e : enemies)
     {
+      if (e.hp <= 0)
+        continue;
       if (e.pos.y > camera + 85 || e.pos.y < camera - 30)
         continue;
       e.phase += dt;
@@ -260,12 +301,41 @@ namespace bb
         e.vel = delta.unit() * (e.type == 2 ? 3.5 : 7.5);
       e.pos += e.vel * dt;
       e.pos.x = std::clamp(e.pos.x, e.radius, width - e.radius);
+      if (e.type == 2 && heatShieldActive() && segmentDistance(e.pos, old, player.pos) < e.radius + radius)
+      {
+        double away = old.x - e.pos.x;
+        if (std::abs(away) < 0.001)
+          away = std::abs(player.vel.x) > 0.001 ? -player.vel.x : (e.pos.x <= width / 2 ? 1.0 : -1.0);
+        double side = away > 0 ? 1.0 : -1.0;
+        player.vel.x = side * (std::abs(player.vel.x) + heatShieldBruteImpulse);
+        player.pos.x = e.pos.x + side * (e.radius + radius + 0.05);
+        overspeedTime = heatShieldBelowTime = 0;
+        burst(player.pos, 18, 4, 24);
+        burst(player.pos, 12, 5, 18);
+        shake = 0.4;
+        continue;
+      }
+      if (e.type != 2 && heatShieldActive() && segmentDistance(e.pos, old, player.pos) < e.radius + heatShieldRadius)
+      {
+        e.hp = 0;
+        player.shells = std::min(Player::maxBonusShells, player.shells + Player::killAmmo);
+        player.reload = 0;
+        ++kills;
+        ++combo;
+        comboTime = 2;
+        bonus += 100 * std::min(combo, 8);
+        burst(e.pos, 24, 4, 22);
+        shake = 0.18;
+        continue;
+      }
       if (delta.length() < e.radius + radius)
-        damage(e.pos, "Rammed by a hunter");
+        damage(e.pos, "Rammed by a hunter", e.type != 2);
       e.cooldown -= dt;
       if (e.type != 0 && e.cooldown <= 0 && delta.length() < 48)
       {
-        bullets.push_back({e.pos, delta.unit() * (13 + std::min(12, sector())), 4, true});
+        Bullet projectile{e.pos, delta.unit() * (13 + std::min(12, sector())), 4, true};
+        projectile.bruteShot = e.type == 2;
+        bullets.push_back(projectile);
         e.cooldown = e.type == 2 ? 0.9 : 1.7;
       }
     }
@@ -276,9 +346,10 @@ namespace bb
       b.life -= dt;
       if (b.hostile)
       {
-        if (segmentDistance(player.pos, before, b.pos) < radius + 0.4)
+        double hitRadius = heatShieldActive() && !b.bruteShot ? heatShieldRadius : radius;
+        if (segmentDistance(player.pos, before, b.pos) < hitRadius + 0.4)
         {
-          damage(b.pos, "Hit by a hunter's plasma");
+          damage(b.pos, "Hit by a hunter's plasma", !b.bruteShot);
           b.life = 0;
         }
       }
@@ -295,19 +366,23 @@ namespace bb
           burst(b.pos, 4, 0, 10, b.shotMode);
           if (e.hp <= 0)
           {
+            if (b.shotMode == ShotMode::Scatter)
+              scatterBoost = scatterBoostSeconds;
             if (b.killRecoil && !b.killRecoil->used)
             {
               b.killRecoil->used = true;
               player.vel += b.killRecoil->impulse;
-              double speed = player.vel.length();
-              if (speed > 57)
-                player.vel = player.vel * (57 / speed);
+
               shake = 0.23;
             }
-            player.shells = std::min(Player::maxBonusShells, player.shells + 3);
+            player.shells = std::min(Player::maxBonusShells, player.shells + Player::killAmmo);
             player.reload = 0;
             if (e.type == 2)
-              player.hp = std::min(3, player.hp + 1);
+            {
+              double roll = random(0, 1);
+              int heal = b.shotMode == ShotMode::Scatter && roll < 0.10 ? 2 : 1;
+              player.hp = std::min(3, player.hp + heal);
+            }
             ++kills;
             ++combo;
             comboTime = 2;
@@ -317,6 +392,20 @@ namespace bb
           }
           break;
         }
+      }
+    }
+    if (heatShieldActive() && dt > 0)
+    {
+      constexpr double emberInterval = 0.04;
+      int ember = static_cast<int>(std::floor(time / emberInterval));
+      if (ember > static_cast<int>(std::floor((time - dt) / emberInterval)))
+      {
+        double phase = ember * 2.399963;
+        double life = 0.4 + 0.1 * std::sin(phase);
+        double side = ember % 2 ? -1.0 : 1.0;
+        Vec pos = player.pos + Vec{side * 1.4, 1.1};
+        Vec velocity = player.vel * 0.8 + Vec{side * 2, -6};
+        particles.push_back({pos, velocity, life, life, ember % 2 ? 4 : 5});
       }
     }
     for (auto &p : particles)

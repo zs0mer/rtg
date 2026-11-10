@@ -81,15 +81,38 @@ from **1 to 3 to 5 to 7 pixels** wide across four equal 30-unit distance bands
 and dims during recharge.
 The circle recharges for 1.25 seconds between changes. Only player contact
 activates it, including falling into it; shots pass through without changing modes.
-Staying inside does not repeatedly change modes. There is no keyboard mode-switch control.
+Staying inside does not repeatedly change modes. Touching circles is the normal
+mode-switch control.
 The current mode appears beside the bottom HUD. Each blast costs one ammo and
 retains the same firing cooldown. Damage per pellet is **1** for Normal, **5** for
-Longshot, and **0.85** for Scatter. Longshot has **0.75×**
-normal horizontal recoil and **1.1×** vertical recoil. Scatter fires with
-**0.9×** recoil; if its pellets kill an enemy, an extra **0.85×** recoil impulse
-in the original recoil direction brings that blast's total to **1.75×**.
-The bonus triggers once per blast, even if it kills multiple enemies, and still
-applies if you switch modes before the pellets hit. The usual speed cap remains.
+Longshot, and **1** for Scatter. All guns share a base recoil of **25 units/s** at
+speeds up to **25**, decreasing linearly to **15 units/s at 57** and staying at 15
+above 57. This uses combined speed before firing, regardless of aim direction.
+Mode multipliers apply after this taper: Longshot has **0.75×**
+horizontal recoil and **1.1×** vertical recoil. Scatter fires with
+**0.85×** recoil; if its pellets kill an enemy, an extra **0.85×** recoil impulse
+in the original recoil direction brings that blast's total to **1.70×**. The kill
+impulse retains the tapered recoil calculated when that blast was fired.
+The bonus triggers once per unboosted blast, even if it kills multiple enemies,
+and still applies if you switch modes before the pellets hit. Each Scatter kill
+also starts or refreshes a **1-second boost**: subsequent Scatter shots fire with
+**1.70×** recoil immediately, without another recoil bonus when they kill. The
+boost does not stack, does not affect other modes, and expires after 1 second
+without a Scatter kill. There is no hard speed cap: above **57 world units/s**,
+deceleration is recalculated every update as **(current speed − 57) / 1**.
+Braking grows with excess speed and weakens as you approach 57, with no fixed
+deadline or hard clamp. This applies in every direction, including falls.
+The left-side **velocity meter** shows your combined speed and marks the 57 threshold.
+After **3 continuous seconds above 60**, a yellow-red **heat shield** boils along
+your character's top in a one-pixel-thick layer, with animated one-pixel-wide drips
+and fading ember particles spilling down both sides.
+Its **2.5-unit radius** destroys nearby regular enemies, awarding **three ammo per kill** (up to six),
+and blocks their bullets. Shield kills count toward kills/streaks but do not grant
+Scatter recoil boosts. **Shielded brute contact consumes the shield** instead of
+hurting you: horizontal motion bounces away from the brute, with an extra **80-unit/s
+horizontal kick**. Vertical momentum is unchanged. The brute survives, and the shield must charge again. **Brute bullets,
+spikes and meltdown remain dangerous**. Once active, the shield disappears after **1 continuous second below 60**, resetting
+its charge. Hitting **60 or higher** during that grace period cancels the countdown. Retry clears the shield and both timers.
 
 The black gun has a glowing, mode-colored muzzle emitter. Normal fire uses neon
 cyan energy; Longshot uses deep electric blue; Scatter keeps its warm gold color.
@@ -97,10 +120,11 @@ Pellet trails, muzzle flashes, impact sparks, aiming reticle, and mode label use
 these colors. Fired pellets and their effects retain their firing mode's color
 when you switch modes. Normal and Longshot colors stay fixed across themes.
 
-- **NORMAL:** 10 pellets, standard spread and roughly 32–43 units of range.
+- **NORMAL:** 10 pellets, standard spread and roughly 29–38 units of range.
 - **LONGSHOT:** 2 tightly grouped pellets, roughly 140–149 units of range,
   with a generous 2.5-unit hit radius (versus 0.55 for other player pellets).
-- **SCATTER:** 24 pellets, wide spread but only roughly 13–18 units of range.
+- **SCATTER:** 24 pellets, a wider ±0.55-radian spread (about ±31.5°) but only
+  roughly 13–18 units of range.
 
 Switching modes does not refill ammo or bypass the firing cooldown. Retry resets
 the mode to normal.
@@ -109,20 +133,23 @@ the mode to normal.
 down to cross gaps, sideways to ricochet off walls, and up to brake an ascent or
 dive onto a platform. There are deliberately no movement keys or jump button.
 
-Wall bounces retain 78% of sideways speed and shave off 15% of upward speed.
-Falling speed is unaffected by wall contact.
+Wall bounces retain 78% of sideways speed, with a minimum 12-unit sideways
+rebound so slow wall hits push you farther out. Upward velocity is multiplied by
+0.75 on contact; falling speed is unaffected.
 The arena is 100 world units wide, with a centered starting ledge and enemy
 spawns spread across the full width.
 
 - **Four rechargeable shells, up to six with kills.** Each enemy kill instantly
-  adds three shells, capped at six. Safe landings add two shells per touchdown,
+  adds three shells (including heat-shield kills), capped at six. Safe landings add two shells per touchdown,
   capped at four without removing existing bonus ammo; standing on a platform
   does not repeatedly grant ammo.
   Ammo pickups refill to four without removing bonus ammo. Passive reload restores one shell every
   0.75 seconds, only while below four. Firing cancels reload progress and starts
   the timer over. Chain kills to build an ammo reserve.
-- **Enemies drop no items.** Brute kills also instantly restore one hull point,
-  capped at three. Pickups generated on platforms remain available.
+- **Enemies drop no items.** Every brute kill instantly restores **at least one hull
+  point**. Scatter brute kills have a **10% chance to heal two HP** instead of one.
+  Healing is capped at three HP and uses the killing pellet's original mode.
+  Platform pickups remain available.
 - **Cyan ledges** are one-way: fly through from below, land from above.
   Platform friction gradually slows horizontal motion instead of stopping it
   instantly. Airborne momentum is preserved when launching off a ledge.
@@ -131,8 +158,7 @@ spawns spread across the full width.
   Enemy density increases gradually with altitude, with a slower ramp toward
   late-run pressure. Regular enemies keep their normal size at every altitude;
   difficulty ramps through spawn frequency instead of size.
-  Regular enemies have 1 HP: one Normal or Longshot pellet kills them; Scatter
-  takes two pellets.
+  Regular enemies have 1 HP: a single pellet from any mode kills them.
   Rare 12-HP brutes only spawn above **1,000m**.
   Shotgun pellets have a small extra collision margin to make near-grazes fairer;
   enemy projectile hitboxes are unchanged.
@@ -150,6 +176,9 @@ spawns spread across the full width.
   the streak resets to zero. Every kill refreshes the timer. A **BEST** value
   beneath the STREAK label shows your all-time longest streak, retained across
   deaths, retries, and launches. New records save immediately.
+- **Unranked debug runs cannot set height or streak records.** Records earned
+  earlier in the same run are withdrawn if debug tools are used. A fresh retry
+  restores record eligibility; existing records from legitimate runs stay intact.
 - The background uses your terminal's default background, including its
   transparency if configured. The game does not change terminal opacity.
 - Your best height is saved under `$XDG_STATE_HOME/zapy/best-height`, or

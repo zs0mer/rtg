@@ -60,6 +60,7 @@ namespace bb
     double hitRadius = 0.55;
     double damage = 1;
     ShotMode shotMode = ShotMode::Normal;
+    bool bruteShot = false;
   };
   struct Particle
   {
@@ -77,6 +78,7 @@ namespace bb
   {
     static constexpr int maxShells = 4;
     static constexpr int maxBonusShells = 6;
+    static constexpr int killAmmo = 3;
     static constexpr double reloadSeconds = 0.75;
     Vec pos{50, 3}, vel{};
     int hp = 3, shells = maxShells;
@@ -87,6 +89,10 @@ namespace bb
   {
   public:
     static constexpr double width = 100, gravity = 34, radius = 0.85;
+    static constexpr double softSpeedThreshold = 57, overspeedSeconds = 1;
+    static constexpr double heatShieldChargeSeconds = 3, heatShieldSpeedThreshold = 60;
+    static constexpr double heatShieldGraceSeconds = 1, heatShieldRadius = 2.5;
+        static constexpr double heatShieldBruteImpulse = 80;
     Vec modeTarget{}; // Displayed height is world Y minus 3; randomized on each spawn.
     static constexpr double modeTargetRadius = 6;
     double modeTargetCooldown = 0;
@@ -98,16 +104,23 @@ namespace bb
     std::vector<Particle> particles;
     std::vector<Pickup> pickups;
     double camera = 0, altitude = 0, lava = -22, time = 0, shake = 0, flash = 0;
-    double comboTime = 0;
+    static constexpr double scatterBoostSeconds = 1;
+    double comboTime = 0, scatterBoost = 0, overspeedTime = 0, heatShieldBelowTime = 0;
     int kills = 0, combo = 0, bonus = 0;
     bool dead = false;
+    bool debugUsed = false;
     std::string deathReason;
     explicit Game(uint32_t seed = std::random_device{}());
     void reset(uint32_t seed = std::random_device{}());
     bool shoot(Vec target);
+    bool debugSwitchMode();
     const char *shotModeName() const;
     void update(double dt);
     void generate(double top);
+    bool heatShieldActive() const
+    {
+      return !dead && overspeedTime >= heatShieldChargeSeconds && heatShieldBelowTime < heatShieldGraceSeconds;
+    }
     int score() const { return static_cast<int>(altitude); }
     int sector() const { return 1 + static_cast<int>(altitude / 90); }
 
@@ -118,6 +131,6 @@ namespace bb
     double random(double lo, double hi);
     void activateModeTarget();
     void burst(Vec pos, int count, int color, double speed, ShotMode mode = ShotMode::Normal);
-    void damage(Vec from, const char *reason);
+    void damage(Vec from, const char *reason, bool blockedByHeatShield = false);
   };
 }
