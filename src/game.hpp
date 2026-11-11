@@ -119,9 +119,12 @@ namespace bb
     static constexpr double heatShieldChargeSeconds = 3, heatShieldSpeedThreshold = 60;
     static constexpr double heatShieldGraceSeconds = 1, heatShieldRadius = 2.5;
         static constexpr double heatShieldBruteImpulse = 80;
+    static constexpr double heatShieldBreakSeconds = 0.4;
 
     static constexpr double blastRadius = 11, blastBruteDamage = 6;
     static constexpr double blastMinImpulse = 12, blastMaxImpulse = 38;
+    static constexpr double shieldVolatileLaunch = 80, volatileContactLaunch = 40;
+    static constexpr double shotVolatileLaunch = 120;
 
     Vec modeTarget{}; // Displayed height is world Y minus 3; randomized on each spawn.
     static constexpr double modeTargetRadius = 6;
@@ -139,6 +142,8 @@ namespace bb
     // hitStop is consumed by the frontend; the simulation itself never waits on it.
     double hitStop = 0, deathTime = 0, hurtFlash = 0, topSpeed = 0;
     double bannerTime = 0;
+    // Cosmetic: seconds left of the shield's break-up, and how hot it was when it went.
+    double heatShieldBreak = 0, heatShieldBreakHeat = 0;
     std::string banner;
     int bestCombo = 0;
     static constexpr double scatterBoostSeconds = 1;
@@ -163,6 +168,11 @@ namespace bb
     {
       return !dead && overspeedTime >= heatShieldChargeSeconds && heatShieldBelowTime < heatShieldGraceSeconds;
     }
+    // 1 at full heat, cooling through the slowdown grace period; 0 without a shield.
+    double heatShieldHeat() const
+    {
+      return heatShieldActive() ? 1 - 0.55 * heatShieldBelowTime / heatShieldGraceSeconds : 0;
+    }
     int score() const { return static_cast<int>(altitude); }
     int sector() const { return 1 + static_cast<int>(altitude / 90); }
 
@@ -173,11 +183,11 @@ namespace bb
     double random(double lo, double hi);
     void activateModeTarget();
     void burst(Vec pos, int count, int color, double speed, ShotMode mode = ShotMode::Normal);
-    void damage(Vec from, const char *reason, bool blockedByHeatShield = false);
+    void damage(Vec from, const char *reason, bool blockedByHeatShield = false, bool knockback = true);
     void die(const char *reason);
     void kill(Enemy &e, KillCause cause, ShotMode mode = ShotMode::Normal);
 
-    void explode(Vec at);
+    void explode(Vec at, bool shotTriggered);
     void animateEffects(double dt);
   };
 }

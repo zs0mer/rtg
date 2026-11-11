@@ -753,7 +753,16 @@ namespace
 
   void heatShieldRendering()
   {
-    constexpr RGB shieldYellow{255, 220, 35}, shieldRed{255, 55, 20};
+    struct Flame
+    {
+      int x, y; // Relative to the player body.
+      RGB color;
+    };
+    struct Plasma
+    {
+      RGB nose;
+      int size;
+    };
     for (auto [columns, rows] : {std::pair{72, 24}, {104, 36}, {128, 50}})
       for (size_t theme = 0; theme < themes.size(); ++theme)
       {
@@ -767,17 +776,65 @@ namespace
         g.modeTarget = {50, 10000};
         Screen mapping(columns, rows, g.camera);
         const auto [bodyX, bodyY] = mapping.point(g.player.pos);
-        int radius = static_cast<int>(1.1 * mapping.scale) + 1;
-        auto isFire = [&](RGB color) { return color == shieldYellow || color == shieldRed; };
-        auto absent = [&](const Image &image)
+        int cap = std::max(1, static_cast<int>(1.1 * mapping.scale)) + 1;
+        // The shield's pixels are exactly those an identical, unshielded frame lacks.
+        auto flames = [&](const bb::Game &state)
         {
-          for (RGB color : image.pixels)
-            check(!isFire(color), "inactive shield has no body outline or flame pixels");
+          auto bare = state;
+          bare.overspeedTime = bare.heatShieldBelowTime = bare.heatShieldBreak = 0;
+          Image with = render(state, columns, rows), without = render(bare, columns, rows);
+          std::vector<Flame> lit;
+          for (int y = 0; y < with.height; ++y)
+            for (int x = 0; x < with.width; ++x)
+              if (!(with.at(x, y) == without.at(x, y)))
+                lit.push_back({x - bodyX, y - bodyY, with.at(x, y)});
+          return lit;
+        };
+        auto absent = [&](const bb::Game &state)
+        {
+          check(flames(state).empty(), "no shield is drawn without charge or break-up");
+        };
+        auto onRamp = [&](const std::vector<Flame> &lit)
+        {
+          for (const auto &f : lit)
+            check(f.color.r >= 80 && f.color.r >= f.color.g && f.color.g >= f.color.b,
+                  "shield stays on the ember-red to white-hot ramp");
+        };
+        // The heading is in screen space, where rows grow downward. A complete cap is the
+        // ignited shield; a charging one has only spread part of the way from the nose.
+        auto plasma = [&](const bb::Game &state, int headingX, int headingY, bool complete)
+        {
+          auto lit = flames(state);
+          onRamp(lit);
+          Plasma result{ink, static_cast<int>(lit.size())};
+          auto burning = [&](int x, int y)
+          {
+            return std::any_of(lit.begin(), lit.end(), [&](const Flame &f) { return f.x == x && f.y == y; });
+          };
+          for (const auto &f : lit)
+          {
+            int forward = f.x * headingX + f.y * headingY, side = f.y * headingX - f.x * headingY;
+            check(std::hypot(f.x, f.y) >= cap - 0.5, "shield never covers the character body");
+            check(forward <= cap, "nothing burns ahead of the cap");
+            check(std::abs(side) <= cap + 1 && forward >= -2 * cap,
+                  "shield hugs the body: a cap and thin streamers, not an aura");
+            if (f.x == headingX * cap && f.y == headingY * cap)
+              result.nose = f.color;
+          }
+          for (int y = -cap - 1; complete && y <= cap + 1; ++y)
+            for (int x = -cap - 1; x <= cap + 1; ++x)
+            {
+              double distance = std::hypot(x, y);
+              if (distance >= cap - 0.5 && distance < cap + 0.5 && x * headingX + y * headingY >= 0.5 * distance)
+                check(burning(x, y), "an unbroken cap covers the leading face of the body");
+            }
+          check(!(result.nose == ink), "the cap faces the direction of travel");
+          return result;
         };
         check(bb::Game::heatShieldSpeedThreshold == 60, "shield speed threshold is 60");
         check(bb::Game::softSpeedThreshold == 57, "soft physics threshold remains 57");
         check(!g.heatShieldActive(), "speed alone does not activate the shield");
-        absent(render(g, columns, rows));
+        absent(g);
         auto chargeStep = [&]
         {
           g.player.pos = {50, 20};
@@ -790,15 +847,28 @@ namespace
           g.bullets.clear();
           g.pickups.clear();
           g.particles.clear();
-          // The activation shockwave is an effect too; this fixture isolates the body outline.
+          // The activation shockwave is an effect too; this fixture isolates the plasma.
           g.rings.clear();
           g.popups.clear();
         };
-        for (int i = 0; i < 359; ++i)
+        // Charging frames are compared at one instant so only the charge differs.
+        auto charging = [&]
+        {
+          auto frozen = g;
+          frozen.player.pos = {50, 20};
+          frozen.player.invulnerable = 0;
+          frozen.time = 0;
+          return plasma(frozen, 0, -1, false);
+        };
+        for (int i = 0; i < 120; ++i)
           chargeStep();
-        check(!g.heatShieldActive(), "shield remains hidden before three seconds");
-        g.player.pos = {50, 20};
-        absent(render(g, columns, rows));
+        Plasma warming = charging();
+        for (int i = 120; i < 359; ++i)
+          chargeStep();
+        check(!g.heatShieldActive(), "shield is not active before three seconds");
+        Plasma primed = charging();
+        check(warming.nose.g < primed.nose.g && warming.size < primed.size,
+              "charging glow spreads from the nose and heats up");
         chargeStep();
         chargeStep();
         check(g.heatShieldActive() && !g.dead, "continuous overspeed activates rendering fixture");
@@ -806,69 +876,52 @@ namespace
         g.player.invulnerable = 0;
         g.time = 0;
         Image visible = render(g, columns, rows);
-        auto bodyEffect = [&](const Image &image)
-        {
-          int yellow = 0, burningRed = 0;
-          for (int y = 0; y < image.height; ++y)
-            for (int x = 0; x < image.width; ++x)
-              if (isFire(image.at(x, y)))
-              {
-                int dx = std::abs(x - bodyX);
-                int top = bodyY - radius;
-                check((y == top && dx <= radius) ||
-                          (dx == radius && y > top && y <= top + radius * 2 + 2),
-                      "heat is one pixel thick across the top and one pixel wide down each side");
-                yellow += image.at(x, y) == shieldYellow;
-                burningRed += image.at(x, y) == shieldRed;
-              }
-          check(yellow > 0 && burningRed > 0, "body effect uses both fixed yellow and red fire colors");
-          for (int offset = -radius; offset <= radius; ++offset)
-            check(isFire(image.at(bodyX + offset, bodyY - radius)),
-                  "boiling heat covers the character top in a thin layer");
-          check(!isFire(image.at(bodyX, bodyY + radius)), "no bottom crossbar surrounds the character");
-        };
-        bodyEffect(visible);
-        check(visible.at(bodyX - radius, bodyY - radius + 1) == shieldYellow,
-              "left drip begins immediately below the boiling top");
-        check(visible.at(bodyX + radius, bodyY + 2) == shieldYellow,
-              "right drip runs out of phase down the other side");
+        Plasma climbing = plasma(g, 0, -1, true);
+        check(climbing.nose.g >= 150 && climbing.nose.g > primed.nose.g,
+              "ignition takes the nose from a charging glow to yellow or white hot");
+        check(!(visible.at(bodyX, bodyY) == ink), "player is visible behind the shield");
         g.time = 0.125;
-        Image animated = render(g, columns, rows);
-        bodyEffect(animated);
-        check(animated.pixels != visible.pixels, "burning shield visibly animates with time");
-        check(animated.at(bodyX - radius, bodyY - radius + 1) == shieldRed &&
-                  animated.at(bodyX - radius, bodyY - radius + 2) == shieldYellow,
-              "left yellow droplet moves down leaving a red tail");
-        check(animated.at(bodyX + radius, bodyY + 3) == shieldYellow,
-              "right droplet also advances down the character side");
-        check(animated.at(bodyX, bodyY - radius) != visible.at(bodyX, bodyY - radius),
-              "boiling top flickers between yellow and red");
-        check(!(visible.at(bodyX, bodyY) == ink), "player is visible inside the heat outline");
+        check(render(g, columns, rows).pixels != visible.pixels, "shield visibly animates with time");
+        plasma(g, 0, -1, true);
         g.time = 1.0 / 18;
-        visible = render(g, columns, rows);
         g.player.invulnerable = 1;
-        Image blinking = render(g, columns, rows);
-        check(blinking.at(bodyX, bodyY) == ink, "invulnerability blink hides player body");
-        bodyEffect(blinking);
-        for (int y = 0; y < visible.height; ++y)
-          for (int x = 0; x < visible.width; ++x)
-            if (isFire(visible.at(x, y)) || isFire(blinking.at(x, y)))
-              check(blinking.at(x, y) == visible.at(x, y), "body shield survives player blink unchanged");
+        check(render(g, columns, rows).at(bodyX, bodyY) == ink, "invulnerability blink hides player body");
+        plasma(g, 0, -1, true);
+        g.player.invulnerable = 0;
         auto slowed = g;
         slowed.player.vel = {60, 0};
         check(slowed.heatShieldActive(), "shield remains visible at speed 60 during grace period");
-        bodyEffect(render(slowed, columns, rows));
+        Plasma sideways = plasma(slowed, 1, 0, true);
         slowed.player.vel = {59, 0};
         slowed.heatShieldBelowTime = 0.999;
         check(slowed.heatShieldActive(), "shield remains visible just before one-second slowdown expiry");
-        bodyEffect(render(slowed, columns, rows));
+        Plasma cooling = plasma(slowed, 1, 0, true);
+        check(cooling.nose.g < sideways.nose.g && cooling.size <= sideways.size,
+              "shield cools as the grace period runs out");
         slowed.player.vel = {};
         slowed.heatShieldBelowTime = 1;
         check(!slowed.heatShieldActive(), "shield disappears after one second below threshold");
-        absent(render(slowed, columns, rows));
+        absent(slowed);
+        auto hottest = [](const std::vector<Flame> &lit)
+        {
+          int green = 0;
+          for (const auto &f : lit)
+            green = std::max(green, f.color.g);
+          return green;
+        };
+        slowed.heatShieldBreakHeat = 1;
+        slowed.heatShieldBreak = bb::Game::heatShieldBreakSeconds * 0.95;
+        auto shards = flames(slowed);
+        slowed.heatShieldBreak = bb::Game::heatShieldBreakSeconds * 0.1;
+        auto debris = flames(slowed);
+        onRamp(shards);
+        onRamp(debris);
+        check(!shards.empty() && debris.size() <= shards.size() && hottest(debris) < hottest(shards),
+              "a broken shield flies apart in shards that cool and crumble away");
+        g.heatShieldBreak = bb::Game::heatShieldBreakSeconds / 2;
         g.dead = true;
         check(!g.heatShieldActive(), "dead player has no active shield");
-        absent(render(g, columns, rows));
+        absent(g);
       }
   }
 

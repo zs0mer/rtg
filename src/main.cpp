@@ -123,6 +123,17 @@ namespace
   static_assert(themePhase(0, 1500).current == 2 && themePhase(0, 1500).blend == 0);
   static_assert(themePhase(9, 750).current == 0 && themePhase(0, 7500).current == 0);
   static_assert(mix({0, 100, 200}, {100, 200, 0}, 0.5) == RGB{50, 150, 100});
+  // Heat ramp for the shield plasma: ember red, through the fixed fire colours, to white-hot.
+  RGB heatColor(double heat)
+  {
+    constexpr RGB whiteHot{255, 250, 205};
+    heat = std::clamp(heat, 0.0, 1.0);
+    if (heat < 0.35)
+      return dim(fireRed, 0.35 + heat / 0.35 * 0.65);
+    if (heat < 0.75)
+      return mix(fireRed, fireYellow, (heat - 0.35) / 0.4);
+    return mix(fireYellow, whiteHot, (heat - 0.75) / 0.25);
+  }
   void applyTheme(size_t index, double altitude = 0)
   {
     auto phase = themePhase(index, altitude);
@@ -331,6 +342,85 @@ namespace
       text(3 + speedWidth - 2, 12, "|", fireYellow);
       text(3 + speedWidth - 1, 12, overcap ? "!" : ".", overcap ? fireRed : muted);
     }
+    // A heat shield, not an aura: a glowing cap pressed against the leading face of the body,
+    // shedding two thin plasma streamers along its flanks. The glow creeps out from the nose while
+    // charging, cools through the grace period, and flies apart in shards when the shield breaks.
+    void heatShield(const bb::Game &g)
+    {
+      auto [cx, cy] = point(g.player.pos);
+      double speed = g.player.vel.length();
+      // Screen space: pixel rows grow downward.
+      Vec heading = speed > 1 ? Vec{g.player.vel.x / speed, -g.player.vel.y / speed} : Vec{0, -1};
+      // One pixel clear of the body.
+      const int cap = std::max(1, static_cast<int>(1.1 * scale)) + 1;
+      constexpr double capFacing = 0.4; // The cap reaches about 66 degrees either side of the nose.
+      const double capAngle = std::acos(capFacing);
+      const double charge = g.overspeedTime / bb::Game::heatShieldChargeSeconds;
+      double heat = 0, spread = 0, trail = 0;
+      if (g.heatShieldActive())
+      {
+        heat = g.heatShieldHeat();
+        spread = 1;
+        trail = heat * (0.5 + 0.5 * std::min(1.0, speed / 90));
+      }
+      else if (charge > 0 && charge < 1)
+      {
+        // Pulses faster as it nears ignition.
+        heat = (0.2 + 0.4 * charge) * (0.85 + 0.15 * std::sin(g.time * (8 + 20 * charge)));
+        spread = 0.3 + 0.7 * charge;
+        trail = 0.5 * std::max(0.0, (charge - 0.4) / 0.6);
+      }
+      const double shatter = g.heatShieldBreak > 0 ? 1 - g.heatShieldBreak / bb::Game::heatShieldBreakSeconds : -1;
+      const double streamer = cap * 2.2 * trail;
+      const int reach = cap + static_cast<int>(std::ceil(streamer)) + 1;
+      const uint32_t frame = static_cast<uint32_t>(g.time * 30);
+      for (int y = -reach; y <= reach; ++y)
+        for (int x = -reach; x <= reach; ++x)
+        {
+          double distance = std::hypot(x, y);
+          if (distance < cap - 0.5)
+            continue;
+          double forward = x * heading.x + y * heading.y, side = y * heading.x - x * heading.y;
+          const bool onCap = distance < cap + 0.5 && forward >= capFacing * distance;
+          const uint32_t seed = starHash(static_cast<uint32_t>(x + 512), static_cast<uint32_t>(y + 512));
+          if (onCap && shatter >= 0 && seed % 100 >= shatter * 80)
+          {
+            // Shards burst outwards, then the airflow sweeps them back past the body.
+            double push = 1 + shatter * (1.2 + (seed >> 8) % 100 / 100.0), swept = shatter * shatter * cap * 2;
+            pixel(cx + static_cast<int>(std::lround(x * push - heading.x * swept)),
+                  cy + static_cast<int>(std::lround(y * push - heading.y * swept)),
+                  heatColor(g.heatShieldBreakHeat * (1 - shatter) + (shatter < 0.2 ? 0.25 : 0)));
+          }
+          if (heat <= 0)
+            continue;
+          double grain = starHash(static_cast<uint32_t>(x + 512) + frame * 7919u, static_cast<uint32_t>(y + 512)) % 256 / 255.0 - 0.5;
+          double glow;
+          if (onCap)
+          {
+            double facing = forward / distance;
+            double angle = std::acos(std::clamp(facing, -1.0, 1.0));
+            if (angle > spread * capAngle)
+              continue;
+            // Hottest at the nose, with ripples running out to both rims.
+            glow = 0.5 + 0.45 * (facing - capFacing) / (1 - capFacing) + 0.15 * std::sin(angle * 5 - g.time * 18) + grain * 0.14;
+          }
+          else
+          {
+            double behind = cap * capFacing - forward; // Distance downstream of the cap's rim.
+            if (behind <= 0 || behind > streamer)
+              continue;
+            double progress = behind / streamer;
+            double flank = cap * (1 - 0.3 * progress) + 0.35 * std::sin(behind * 1.4 - g.time * 20 + (side > 0 ? 0 : 2.1));
+            if (std::abs(std::abs(side) - flank) > 0.5)
+              continue;
+            double flow = 0.5 + 0.5 * std::sin(behind * 1.3 - g.time * 24);
+            glow = 0.55 * (1 - progress) * (0.55 + 0.45 * flow) + grain * 0.2;
+            if (glow * heat < 0.1)
+              continue;
+          }
+          pixel(cx + x, cy + y, heatColor(glow * heat));
+        }
+    }
     void warning(Vec pos, double radius, RGB color, int size = 1, double range = 30)
     {
       double top = bottom + (pixelH - 1) / scale;
@@ -419,6 +509,9 @@ namespace
         for (int i = 3; i <= 10; i += 2)
           dot(g.player.pos + dir * double(i), 0, dim(energy, 0.38));
 
+      // Under the player, so the body and the black gun stay readable against the flames.
+      if (!g.dead && (g.overspeedTime > 0 || g.heatShieldBreak > 0))
+        heatShield(g);
       if (!g.dead && (g.player.invulnerable <= 0 || static_cast<int>(g.time * 18) % 2 == 0))
       {
         dot(g.player.pos, 1.1, white);
@@ -428,23 +521,6 @@ namespace
         if (g.flash > 0)
           dot(g.player.pos + dir * 3.1, 0, shotColor(g.flashMode));
         dot(g.player.pos + Vec{-0.25, 0.3}, 0, cyan);
-      }
-      if (g.heatShieldActive())
-      {
-        auto [bodyX, bodyY] = point(g.player.pos);
-        int radius = static_cast<int>(1.1 * scale) + 1;
-        int phase = static_cast<int>(g.time * 10);
-        int top = bodyY - radius;
-        int cycle = radius * 2 + 2;
-        for (int x = -radius; x <= radius; ++x)
-          pixel(bodyX + x, top, (x + phase) % 2 ? fireRed : fireYellow);
-        // One-pixel-wide streams spill from the top and drip down opposite sides.
-        for (int side : {-1, 1})
-        {
-          int drop = 1 + (phase + (side > 0 ? cycle / 2 : 0)) % cycle;
-          pixel(bodyX + side * radius, top + drop - 1, fireRed);
-          pixel(bodyX + side * radius, top + drop, fireYellow);
-        }
       }
       line(aim - Vec{1.2, 0}, aim + Vec{1.2, 0}, energy);
       line(aim - Vec{0, 1.2}, aim + Vec{0, 1.2}, energy);

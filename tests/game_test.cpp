@@ -934,6 +934,8 @@ int main()
       slowStep();
     check(!shield.heatShieldActive() && shield.overspeedTime == 0 && near(shield.heatShieldBelowTime, 1),
           "one continuous second below threshold expires shield and resets charge");
+    check(shield.heatShieldBreak > 0 && near(shield.heatShieldBreakHeat, 1 - 0.55 * 119.0 / 120),
+          "expiry starts the cosmetic break-up at the heat the shield had cooled to");
     shield.player.vel = {60, 0};
     shield.update(0);
     check(shield.overspeedTime == 0 && !shield.heatShieldActive(),
@@ -958,7 +960,8 @@ int main()
     check(!shield.heatShieldActive() && near(shield.overspeedTime, before),
           "death hides heat shield and freezes charge");
     shield.reset(42);
-    check(shield.overspeedTime == 0 && shield.heatShieldBelowTime == 0 && !shield.heatShieldActive(),
+    check(shield.overspeedTime == 0 && shield.heatShieldBelowTime == 0 && !shield.heatShieldActive() &&
+              shield.heatShieldBreak == 0,
               "retry clears heat shield and both timers");
   }
   {
@@ -1039,15 +1042,20 @@ int main()
         check(near(bounce.player.pos.y, 30 + normal.y * 2),
               "separating from brute does not teleport the player vertically");
         check(!bounce.heatShieldActive() && bounce.overspeedTime == 0 && bounce.heatShieldBelowTime == 0 &&
-                  bounce.player.hp == 3 && near(bounce.player.invulnerable, invulnerable) &&
+                  bounce.player.hp == (invulnerable > 0 ? 3 : 2) &&
+                  near(bounce.player.invulnerable, invulnerable > 0 ? invulnerable : 1.25) &&
                   bounce.enemies.size() == 1 && near(bounce.enemies.front().hp, bb::Enemy::bruteHp) &&
                   bounce.kills == 0 && bounce.player.shells == 4 && bounce.combo == 0,
-              "brute survives the shield sacrifice; bounce deals no hull damage or kill rewards even while invulnerable");
+              "brute survives; shield bounce costs one HP unless already invulnerable, without kill rewards");
+        check(near(bounce.heatShieldBreak, bb::Game::heatShieldBreakSeconds) &&
+                  near(bounce.heatShieldBreakHeat, 1 - 0.55 * 0.5),
+              "brute contact starts the cosmetic break-up at the shield's current heat");
         check((bounce.player.pos - bounce.enemies.front().pos).length() > 2.3 + bb::Game::radius,
               "bounce separates player from brute to avoid repeated overlap");
         bb::Vec after = bounce.player.vel;
         bounce.update(0);
-        check(near(bounce.player.vel.x, after.x) && near(bounce.player.vel.y, after.y) && bounce.player.hp == 3,
+        check(near(bounce.player.vel.x, after.x) && near(bounce.player.vel.y, after.y) &&
+                  bounce.player.hp == (invulnerable > 0 ? 3 : 2),
               "shield cannot bounce or damage player again immediately after being consumed");
       }
   {
@@ -1061,8 +1069,16 @@ int main()
     verticalBeforeBounce -= (verticalBeforeBounce - bb::Game::softSpeedThreshold) / 30;
     check(near(sweepBounce.player.vel.y, verticalBeforeBounce) && near(sweepBounce.player.vel.x, 80) &&
               !sweepBounce.heatShieldActive() && sweepBounce.overspeedTime == 0 &&
-              sweepBounce.player.pos.y > sweepBounce.enemies.front().pos.y && sweepBounce.player.hp == 3,
-          "swept brute crossing launches sideways while preserving rising velocity after normal gravity and drag");
+              sweepBounce.player.pos.y > sweepBounce.enemies.front().pos.y && sweepBounce.player.hp == 2,
+          "swept brute crossing costs one HP and launches sideways while preserving rising velocity");
+    bb::Game fatal(42);
+    isolateCombat(fatal);
+    fatal.player.hp = 1;
+    fatal.overspeedTime = bb::Game::heatShieldChargeSeconds;
+    fatal.enemies = {{fatal.player.pos, {}, bb::Enemy::bruteHp, 2.3, 0, 100, 2}};
+    fatal.update(0);
+    check(fatal.dead && fatal.player.hp == 0 && !fatal.heatShieldActive() &&
+              fatal.deathReason == "Crushed by a brute", "last HP can be lost in a shielded brute bounce");
     bb::Game stationary(42);
     isolateCombat(stationary);
     stationary.overspeedTime = bb::Game::heatShieldChargeSeconds;
@@ -1070,14 +1086,19 @@ int main()
     stationary.enemies = {{stationary.player.pos, {}, bb::Enemy::bruteHp, 2.3, 0, 100, 2}};
     stationary.update(0);
     check(near(stationary.player.vel.x, 80) && near(stationary.player.vel.y, 0) &&
-              !stationary.heatShieldActive() && stationary.player.hp == 3,
-          "coincident stationary contact has a finite horizontal bounce fallback");
+              !stationary.heatShieldActive() && stationary.player.hp == 2,
+          "coincident stationary contact costs one HP and has a finite horizontal bounce fallback");
     stationary.enemies.clear();
     bb::Bullet bruteBullet{stationary.player.pos, {}, 1, true};
     bruteBullet.bruteShot = true;
     stationary.bullets = {bruteBullet};
     stationary.update(0);
-    check(stationary.player.hp == 2, "shield bounce grants no blanket immunity to brute bullets");
+    check(stationary.player.hp == 2 && stationary.bullets.empty(),
+          "bounce invulnerability prevents an immediate second hit from a brute bullet");
+    stationary.player.invulnerable = 0;
+    stationary.bullets = {bruteBullet};
+    stationary.update(0);
+    check(stationary.player.hp == 1, "consumed shield does not block a later brute bullet");
   }
   for (bool charged : {false, true})
     for (int type : {0, 1, 2})
@@ -1089,8 +1110,8 @@ int main()
       contact.enemies = {{contact.player.pos, {}, 12, 2.3, 0, 100, type}};
       contact.update(0);
       bool blocked = charged && type != 2;
-      check(contact.player.hp == (charged ? 3 : 2),
-            "active shield protects brute contact by breaking; uncharged players take contact damage");
+      check(contact.player.hp == (blocked ? 3 : 2),
+            "shielded regular enemies cause no damage; shielded brutes and uncharged contacts cost one HP");
       if (blocked)
         check(contact.player.invulnerable == 0 && near(contact.player.vel.y, 100) &&
                   contact.enemies.empty() && contact.kills == 1 && contact.player.shells == 6,
@@ -1111,6 +1132,85 @@ int main()
                   reach.player.shells == (burned ? 6 : 4) && reach.player.hp == 3,
               "larger shield radius burns regular enemies beyond body contact but preserves distant enemies and brutes");
       }
+  for (double bombY : {28.0, 30.0, 32.0})
+    for (double invulnerable : {0.0, 0.7})
+    {
+      bb::Game contact(42);
+      isolateCombat(contact);
+      contact.player.vel = {0, -50};
+      contact.player.invulnerable = invulnerable;
+      contact.overspeedTime = bb::Game::heatShieldChargeSeconds;
+      contact.enemies = {{{50, bombY}, {}, 1, 1.25, 0, 100, bb::Enemy::volatileDrone},
+                         {{56, bombY}, {}, 1, 1.25, 0, 100, bb::Enemy::drone}};
+      bb::Game bare = contact;
+      bare.overspeedTime = 0;
+      contact.update(0);
+      bare.update(0);
+      check(contact.player.hp == (invulnerable > 0 ? 3 : 2) &&
+                near(contact.player.invulnerable, invulnerable > 0 ? invulnerable : 1.25) &&
+                !contact.dead && contact.heatShieldActive() && contact.player.vel.y >= bb::Game::shieldVolatileLaunch,
+            "direct shield contact with a volatile costs one HP when vulnerable and launches upward from any side");
+      check(bare.player.hp == contact.player.hp &&
+                near(bare.player.invulnerable, contact.player.invulnerable) &&
+                bare.player.vel.y >= bb::Game::volatileContactLaunch &&
+                bare.player.vel.y < contact.player.vel.y && !bare.dead,
+            "unshielded volatile contact costs the same HP but launches upward less strongly");
+      check(contact.kills == 2 && contact.enemies.empty() && contact.player.shells == 6 &&
+                bare.kills == 2 && bare.enemies.empty() && bare.player.shells == 6,
+            "volatile contact with or without a shield detonates nearby enemies and rewards ammo");
+      contact.update(0);
+      bare.update(0);
+      check(contact.player.hp == (invulnerable > 0 ? 3 : 2) && bare.player.hp == contact.player.hp,
+            "a destroyed volatile cannot deal contact damage twice");
+    }
+  {
+    bb::Game sweep(42);
+    isolateCombat(sweep);
+    sweep.overspeedTime = bb::Game::heatShieldChargeSeconds;
+    sweep.player.vel = {0, 120};
+    sweep.enemies = {{{50, 31.9}, {}, 1, 0.1, 0, 100, bb::Enemy::volatileDrone}};
+    bb::Game bareSweep = sweep;
+    bareSweep.overspeedTime = 0;
+    sweep.update(1.0 / 30);
+    bareSweep.update(1.0 / 30);
+    check(sweep.enemies.empty() && sweep.player.hp == 2 &&
+              sweep.player.vel.y >= bb::Game::shieldVolatileLaunch &&
+              bareSweep.enemies.empty() && bareSweep.player.hp == 2 &&
+              bareSweep.player.vel.y >= bb::Game::volatileContactLaunch &&
+              bareSweep.player.vel.y < sweep.player.vel.y,
+          "fast shielded or unshielded crossings detonate volatiles, with less launch without a shield");
+    bb::Game ordinary(42);
+    isolateCombat(ordinary);
+    ordinary.enemies = {{ordinary.player.pos, {}, 1, 1.25, 0, 100, bb::Enemy::volatileDrone}};
+    ordinary.update(0);
+    check(ordinary.player.hp == 2 && ordinary.kills == 1 && ordinary.enemies.empty() &&
+              ordinary.player.vel.y >= bb::Game::volatileContactLaunch &&
+              ordinary.player.vel.y < bb::Game::shieldVolatileLaunch,
+          "without a shield, volatile contact detonates and launches with a smaller impulse");
+    bb::Game fatal(42);
+    isolateCombat(fatal);
+    fatal.player.hp = 1;
+    fatal.overspeedTime = bb::Game::heatShieldChargeSeconds;
+    fatal.enemies = {{fatal.player.pos, {}, 1, 1.25, 0, 100, bb::Enemy::volatileDrone}};
+    bb::Game bareFatal = fatal;
+    bareFatal.overspeedTime = 0;
+    fatal.update(0);
+    bareFatal.update(0);
+    check(fatal.dead && fatal.player.hp == 0 && fatal.kills == 1 &&
+              fatal.deathReason == "Caught in a volatile explosion" &&
+              bareFatal.dead && bareFatal.player.hp == 0 && bareFatal.kills == 1 &&
+              bareFatal.deathReason == fatal.deathReason,
+          "direct volatile contact can destroy a player on their last HP with or without a shield");
+    bb::Game remote(42);
+    isolateCombat(remote);
+    remote.overspeedTime = bb::Game::heatShieldChargeSeconds;
+    remote.enemies = {{{50, 36}, {}, 1, 1.25, 0, 100, bb::Enemy::volatileDrone}};
+    remote.bullets = {{{50, 36}, {}, 0.3, false}};
+    remote.update(0);
+    check(remote.enemies.empty() && remote.kills == 1 && remote.player.hp == 3 &&
+              remote.player.invulnerable == 0 && remote.player.vel.y < bb::Game::volatileContactLaunch,
+          "shooting a volatile while shielded still gives only the normal, harmless blast push");
+  }
   for (bool brute : {false, true})
     for (double offset : {1.3, 2.89, 2.91})
     {
@@ -1736,8 +1836,31 @@ int main()
     thrown.update(0);
     check(thrown.player.hp == 3 && near(thrown.player.vel.x, 0) &&
               near(thrown.player.vel.y, bb::Game::blastMaxImpulse +
-                                            (bb::Game::blastMinImpulse - bb::Game::blastMaxImpulse) * 4 / bb::Game::blastRadius),
-          "a nearby blast throws the player clear, harder the closer it is, and never costs hull");
+                                            (bb::Game::blastMinImpulse - bb::Game::blastMaxImpulse) * 4 / bb::Game::blastRadius +
+                                            bb::Game::shotVolatileLaunch * (1 - 4.0 / bb::Game::blastRadius)),
+          "shooting a nearby volatile adds a strong upward, distance-scaled launch without costing hull");
+    for (double distance : {3.0, 5.0, 10.0, 12.0})
+    {
+      bb::Game shot(42), chain(42);
+      isolateCombat(shot);
+      isolateCombat(chain);
+      bb::Vec bomb{50, 30 + distance};
+      shot.enemies = {{bomb, {}, 1, 1.25, 0, 100, bb::Enemy::volatileDrone}};
+      shot.bullets = {{bomb, {}, 0.3, false}};
+      chain.enemies = {{bomb, {}, 1, 1.25, 0, 100, bb::Enemy::volatileDrone}};
+      chain.enemies.front().fuse = 0.001;
+      shot.update(1.0 / 120);
+      chain.update(1.0 / 120);
+      double bonus = distance < bb::Game::blastRadius + bb::Game::radius
+                         ? bb::Game::shotVolatileLaunch * (1 - std::min(distance / bb::Game::blastRadius, 1.0))
+                         : 0;
+      check(shot.kills == 1 && chain.kills == 1 && shot.player.hp == 3 && chain.player.hp == 3 &&
+                std::abs(shot.player.vel.y - chain.player.vel.y - bonus) < 0.5,
+            "only a directly shot volatile gets the proximity-scaled extra launch, not its chain explosion");
+      if (distance == 3)
+        check(shot.player.vel.y > 50 && chain.player.vel.y < 0,
+              "shooting a bomb just above the player launches upward even when its radial blast pushes down");
+    }
   }
   {
     bb::Game streak(42);

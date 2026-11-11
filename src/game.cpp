@@ -39,7 +39,7 @@ namespace bb
     popups.clear();
     banner.clear();
     camera = altitude = time = shake = flash = comboTime = scatterBoost = overspeedTime = heatShieldBelowTime = 0;
-    hitStop = deathTime = hurtFlash = topSpeed = bannerTime = 0;
+    hitStop = deathTime = hurtFlash = topSpeed = bannerTime = heatShieldBreak = heatShieldBreakHeat = 0;
     lava = -22;
     kills = combo = bonus = bestCombo = 0;
     generated = 1;
@@ -161,7 +161,7 @@ namespace bb
     shake = 0.7;
     hitStop = std::max(hitStop, 0.16);
   }
-  void Game::damage(Vec from, const char *reason, bool blockedByHeatShield)
+  void Game::damage(Vec from, const char *reason, bool blockedByHeatShield, bool knockback)
   {
     if (dead || player.invulnerable > 0 || (blockedByHeatShield && heatShieldActive()))
       return;
@@ -170,13 +170,14 @@ namespace bb
     shake = 0.4;
     hurtFlash = 0.4;
     hitStop = std::max(hitStop, 0.07);
-    player.vel += (player.pos - from).unit() * 13;
+    if (knockback)
+      player.vel += (player.pos - from).unit() * 13;
     burst(player.pos, 22, 2, 20);
     if (player.hp <= 0)
       die(reason);
   }
 
-  void Game::explode(Vec at)
+  void Game::explode(Vec at, bool shotTriggered)
   {
     burst(at, 30, colorFireYellow, 30);
     burst(at, 16, colorFireRed, 20);
@@ -207,7 +208,7 @@ namespace bb
     for (auto &b : bullets)
       if (b.hostile && b.life > 0 && (b.pos - at).length() < blastRadius)
         b.life = 0;
-    // The blast never costs hull: it throws nearby players clear.
+    // A blast by itself never costs hull; direct contact with a volatile does.
     Vec away = player.pos - at;
     double distance = away.length();
     if (distance < blastRadius + radius)
@@ -216,6 +217,8 @@ namespace bb
       direction = (direction + Vec{0, 0.5}).unit();
       double falloff = std::clamp(distance / blastRadius, 0.0, 1.0);
       player.vel += direction * (blastMaxImpulse + (blastMinImpulse - blastMaxImpulse) * falloff);
+      if (shotTriggered)
+        player.vel.y += shotVolatileLaunch * (1 - falloff);
     }
   }
   void Game::kill(Enemy &e, KillCause cause, ShotMode mode)
@@ -247,7 +250,7 @@ namespace bb
       popup(e.pos + Vec{0, 2}, "x" + std::to_string(combo), colorAmmo, 0.7);
 
     if (e.type == Enemy::volatileDrone)
-      explode(e.pos);
+      explode(e.pos, cause == KillCause::Pellet);
   }
   void Game::generate(double top)
   {
@@ -309,6 +312,7 @@ namespace bb
       p.life -= dt;
     }
     hurtFlash = std::max(0.0, hurtFlash - dt);
+    heatShieldBreak = std::max(0.0, heatShieldBreak - dt);
 
     bannerTime = std::max(0.0, bannerTime - dt);
     removeIf(particles, [](const Particle &p)
@@ -331,6 +335,7 @@ namespace bb
       return;
     }
     time += dt;
+    const double shieldHeat = heatShieldHeat();
     modeTargetCooldown = std::max(0.0, modeTargetCooldown - dt);
     scatterBoost = std::max(0.0, scatterBoost - dt);
 
@@ -495,20 +500,34 @@ namespace bb
         player.vel.x = side * (std::abs(player.vel.x) + heatShieldBruteImpulse);
         player.pos.x = e.pos.x + side * (e.radius + radius + 0.05);
         overspeedTime = heatShieldBelowTime = 0;
+        // Keep the intended horizontal bounce and vertical momentum; damage supplies feedback
+        // and invulnerability, but no second knockback impulse.
+        damage(e.pos, "Crushed by a brute", false, false);
         burst(player.pos, 18, 4, 24);
         burst(player.pos, 12, 5, 18);
         shake = 0.4;
         continue;
       }
-      if (e.type != 2 && heatShieldActive() && segmentDistance(e.pos, old, player.pos) < e.radius + heatShieldRadius)
+      bool shieldContact = e.type != Enemy::brute && heatShieldActive() &&
+                           segmentDistance(e.pos, old, player.pos) < e.radius + heatShieldRadius;
+      if (e.type == Enemy::volatileDrone &&
+          (shieldContact || segmentDistance(e.pos, old, player.pos) < e.radius + radius))
+      {
+        kill(e, shieldContact ? KillCause::Shield : KillCause::Blast);
+        // Only direct contact hurts: remote pellets and chain blasts stay safe.
+        damage(e.pos, "Caught in a volatile explosion", false, false);
+        player.vel.y = std::max(0.0, player.vel.y) +
+                       (shieldContact ? shieldVolatileLaunch : volatileContactLaunch);
+        continue;
+      }
+      if (shieldContact)
       {
         kill(e, KillCause::Shield);
         continue;
       }
       if (delta.length() < e.radius + radius)
         damage(e.pos, e.type == Enemy::brute ? "Flattened by a brute" : e.type == Enemy::hunter ? "Rammed by a hunter"
-                                                                    : e.type == Enemy::volatileDrone ? "Flew into a volatile"
-                                                                                                     : "Rammed by a drone",
+                                                                    : "Rammed by a drone",
                e.type != 2);
       e.cooldown -= dt;
       if (!drifts(e) && e.cooldown <= 0 && delta.length() < 48)
@@ -579,6 +598,12 @@ namespace bb
         Vec velocity = player.vel * 0.8 + Vec{side * 2, -6};
         particles.push_back({pos, velocity, life, life, ember % 2 ? 4 : 5});
       }
+    }
+    // Expiry and brute contact both break the shield; death has its own explosion.
+    if (shieldHeat > 0 && !heatShieldActive() && !dead)
+    {
+      heatShieldBreak = heatShieldBreakSeconds;
+      heatShieldBreakHeat = shieldHeat;
     }
     animateEffects(dt);
     for (auto &p : pickups)

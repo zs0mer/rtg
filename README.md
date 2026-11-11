@@ -103,16 +103,21 @@ deceleration is recalculated every update as **(current speed − 57) / 1**.
 Braking grows with excess speed and weakens as you approach 57, with no fixed
 deadline or hard clamp. This applies in every direction, including falls.
 The left-side **velocity meter** shows your combined speed and marks the 57 threshold.
-After **3 continuous seconds above 60**, a yellow-red **heat shield** boils along
-your character's top in a one-pixel-thick layer, with animated one-pixel-wide drips
-and fading ember particles spilling down both sides.
+While you hold a speed above 60, a **heat shield** charges on your character's leading
+face: an ember at the nose that spreads into a small cap and heats from red to orange,
+pulsing faster as it nears ignition. After **3 continuous seconds above 60** it ignites
+white-hot. The shield is a thin glowing cap hugging the body, shedding two short plasma
+streamers along the flanks and fading ember particles behind; it turns with your
+direction of travel.
 Its **2.5-unit radius** destroys nearby regular enemies, awarding **three ammo per kill** (up to six),
 and blocks their bullets. Shield kills count toward kills/streaks but do not grant
-Scatter recoil boosts. **Shielded brute contact consumes the shield** instead of
-hurting you: horizontal motion bounces away from the brute, with an extra **80-unit/s
-horizontal kick**. Vertical momentum is unchanged. The brute survives, and the shield must charge again. **Brute bullets,
-spikes and meltdown remain dangerous**. Once active, the shield disappears after **1 continuous second below 60**, resetting
-its charge. Hitting **60 or higher** during that grace period cancels the countdown. Retry clears the shield and both timers.
+Scatter recoil boosts. **Shielded brute contact consumes the shield and costs one HP**
+(unless invulnerable): horizontal motion bounces away from the brute, with an extra
+**80-unit/s horizontal kick**. Vertical momentum is unchanged. The brute survives,
+and the shield must charge again. **Bumping into a volatile** detonates it, costs
+one HP (unless invulnerable), and throws you upward even if you were falling. With
+the shield active, the upward launch is twice as strong. **Brute bullets, spikes and meltdown remain dangerous**. Once active, the shield disappears after **1 continuous second below 60**, resetting
+its charge; the cap visibly cools towards ember red as that second runs out. When the shield is lost, to expiry or a brute, it flies apart in shards that are swept back past you. Hitting **60 or higher** during that grace period cancels the countdown. Retry clears the shield and both timers.
 
 The black gun has a glowing, mode-colored muzzle emitter. Normal fire uses neon
 cyan energy; Longshot uses deep electric blue; Scatter keeps its warm gold color.
@@ -140,8 +145,13 @@ These enemies add new opportunities to a recoil-only run, without new controls.
 - **Volatiles.** Enemies flashing yellow and red drift like drones but explode
   when destroyed by any means. The blast (radius **11**) kills regular enemies,
   deals **6** to brutes, erases hostile shots, and sets off other volatiles a beat
-  later, so chains ripple outward. It never costs hull: within range it throws
-  you up and away, harder the closer you are. Volatiles appear above 140m.
+  later, so chains ripple outward. Remote blasts never cost hull: within range they
+  throw you up and away, harder the closer you are. **Shoot a volatile while close**
+  for an extra upward launch of up to **120 units/s**, fading with distance to zero
+  at the blast's 11-unit radius; chained explosions give only the normal blast push.
+  Bumping into a volatile detonates it and costs one HP: it gives a **40-unit/s upward
+  launch** without the shield, or **80 units/s** with it, on top of any blast push.
+  Volatiles appear above 140m.
 - **Formations.** From roughly 300m, wings of **5–7 drones** fly in unison every
   200–300m. Above 500m some carry a volatile at their heart: one shot clears the
   wing.
